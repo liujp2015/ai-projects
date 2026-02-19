@@ -1,0 +1,205 @@
+'use client';
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.default = DocumentsPage;
+const react_1 = require("react");
+const api_1 = require("@/lib/api");
+const link_1 = __importDefault(require("next/link"));
+function DocumentsPage() {
+    const [documents, setDocuments] = (0, react_1.useState)([]);
+    const [reviewCount, setReviewCount] = (0, react_1.useState)(0);
+    const [loading, setLoading] = (0, react_1.useState)(true);
+    const [uploading, setUploading] = (0, react_1.useState)(false);
+    const [error, setError] = (0, react_1.useState)(null);
+    const [showManualInput, setShowManualInput] = (0, react_1.useState)(false);
+    const [manualTitle, setManualTitle] = (0, react_1.useState)('');
+    const [manualContent, setManualContent] = (0, react_1.useState)('');
+    const [savingManual, setSavingManual] = (0, react_1.useState)(false);
+    const loadData = async () => {
+        try {
+            setLoading(true);
+            const [docData, reviewData] = await Promise.all([
+                (0, api_1.fetchDocuments)(),
+                (0, api_1.fetchReviewQueue)().catch(() => []),
+            ]);
+            setDocuments(docData);
+            setReviewCount(reviewData.length);
+        }
+        catch (err) {
+            setError('Failed to load data');
+            console.error(err);
+        }
+        finally {
+            setLoading(false);
+        }
+    };
+    (0, react_1.useEffect)(() => {
+        loadData();
+    }, []);
+    const handleFileUpload = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file)
+            return;
+        try {
+            setUploading(true);
+            setError(null);
+            await (0, api_1.uploadDocument)(file);
+            await loadData();
+        }
+        catch (err) {
+            setError('Upload failed. Please ensure backend is running at :3001');
+            console.error(err);
+        }
+        finally {
+            setUploading(false);
+        }
+    };
+    const handleImagesUpload = async (e) => {
+        const files = Array.from(e.target.files || []);
+        if (files.length === 0)
+            return;
+        try {
+            setUploading(true);
+            setError(null);
+            const title = prompt('Enter a title for this image group:', `Images ${new Date().toLocaleDateString()}`);
+            await (0, api_1.uploadImages)(files, title || undefined);
+            await loadData();
+        }
+        catch (err) {
+            setError('Images upload & OCR failed. Please ensure backend is running at :3001');
+            console.error(err);
+        }
+        finally {
+            setUploading(false);
+        }
+    };
+    const handleManualSubmit = async (e) => {
+        e.preventDefault();
+        if (!manualContent.trim())
+            return;
+        try {
+            setSavingManual(true);
+            setError(null);
+            await (0, api_1.createManualDocument)(manualTitle || 'Untitled Text', manualContent);
+            setManualTitle('');
+            setManualContent('');
+            setShowManualInput(false);
+            await loadData();
+        }
+        catch (err) {
+            setError('Failed to save manual content');
+            console.error(err);
+        }
+        finally {
+            setSavingManual(false);
+        }
+    };
+    const testAudio = () => {
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance('Audio system test. Browser text to speech is active.');
+            utterance.lang = 'en-US';
+            utterance.rate = 1.0;
+            window.speechSynthesis.speak(utterance);
+            console.log('[TTS] Testing browser speech synthesis...');
+        }
+        else {
+            alert('您的浏览器不支持 Web Speech API，请尝试使用 Chrome 或 Edge 浏览器。');
+        }
+    };
+    return (<div className="min-h-screen bg-gray-50 p-8">
+      <div className="max-w-4xl mx-auto">
+        <header className="flex justify-between items-center mb-8">
+          <div className="flex items-center gap-4">
+            <h1 className="text-3xl font-bold text-gray-900">My Library</h1>
+            <div className="flex gap-2 ml-4">
+              <button onClick={testAudio} className="px-3 py-1 text-sm font-medium text-gray-600 border border-gray-300 rounded-md hover:bg-gray-100 transition-colors flex items-center gap-1" title="测试浏览器声音播放">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
+                测试声音
+              </button>
+              <link_1.default href="/user-words" className="px-3 py-1 text-sm font-medium text-blue-600 border border-blue-600 rounded-md hover:bg-blue-50 transition-colors">
+                生词本
+              </link_1.default>
+              <link_1.default href="/review" className="px-3 py-1 text-sm font-medium text-white bg-blue-600 border border-blue-600 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-2">
+                今日复习
+                {reviewCount > 0 && (<span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                    {reviewCount}
+                  </span>)}
+              </link_1.default>
+            </div>
+          </div>
+          <div className="flex gap-4">
+            <button onClick={() => setShowManualInput(!showManualInput)} className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+              {showManualInput ? 'Cancel' : 'Paste Text'}
+            </button>
+            <div className="relative">
+              <input type="file" id="images-upload" className="hidden" accept="image/*" multiple onChange={handleImagesUpload} disabled={uploading}/>
+              <label htmlFor="images-upload" className={`inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 cursor-pointer ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                {uploading ? 'Processing...' : 'Upload Images'}
+              </label>
+            </div>
+            <div className="relative">
+              <input type="file" id="file-upload" className="hidden" accept=".pdf,.docx,.txt" onChange={handleFileUpload} disabled={uploading}/>
+              <label htmlFor="file-upload" className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 cursor-pointer ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                {uploading ? 'Uploading...' : 'Upload File'}
+              </label>
+            </div>
+          </div>
+        </header>
+
+        {showManualInput && (<form onSubmit={handleManualSubmit} className="bg-white shadow sm:rounded-md p-6 mb-8">
+            <h2 className="text-lg font-medium mb-4">Paste Content</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Title (Optional)</label>
+                <input type="text" value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500" placeholder="Enter a title for this content"/>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Content</label>
+                <textarea required rows={8} value={manualContent} onChange={(e) => setManualContent(e.target.value)} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500" placeholder="Paste your English text here..."/>
+              </div>
+              <button type="submit" disabled={savingManual} className="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none disabled:bg-blue-400">
+                {savingManual ? 'Saving...' : 'Save Content'}
+              </button>
+            </div>
+          </form>)}
+
+        {error && (<div className="bg-red-50 border-l-4 border-red-400 p-4 mb-8">
+            <p className="text-red-700">{error}</p>
+          </div>)}
+
+        <div className="bg-white shadow overflow-hidden sm:rounded-md">
+          {loading ? (<div className="p-8 text-center text-gray-500">Loading documents...</div>) : documents.length === 0 ? (<div className="p-8 text-center text-gray-500">No documents yet. Start by uploading one!</div>) : (<ul className="divide-y divide-gray-200">
+              {documents.map((doc) => (<li key={doc.id}>
+                  <link_1.default href={`/documents/${doc.id}`} className="block hover:bg-gray-50">
+                    <div className="px-4 py-4 sm:px-6">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium text-blue-600 truncate">{doc.title}</p>
+                        <div className="ml-2 flex-shrink-0 flex">
+                          <p className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                            {doc.mimeType === 'application/pdf' ? 'PDF' : 'Word'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-2 sm:flex sm:justify-between">
+                        <div className="sm:flex">
+                          <p className="flex items-center text-sm text-gray-500">
+                            {Math.round(doc.fileSize / 1024)} KB
+                          </p>
+                        </div>
+                        <div className="mt-2 flex items-center text-sm text-gray-500 sm:mt-0">
+                          <p>Uploaded on {new Date(doc.createdAt).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </link_1.default>
+                </li>))}
+            </ul>)}
+        </div>
+      </div>
+    </div>);
+}
+//# sourceMappingURL=page.js.map

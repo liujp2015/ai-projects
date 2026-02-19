@@ -1,0 +1,156 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Document {
+  id                   String               @id @default(uuid())
+  title                String
+  filename             String
+  fileSize             Int
+  mimeType             String
+  originalText         String?              @db.Text  // 千问 OCR 返回的原文
+  chineseText          String?              @db.Text  // 纯中文的句子和单词
+  englishText          String?              @db.Text  // 纯英文的句子和单词
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  paragraphs           Paragraph[]
+  exerciseQuestions    ExerciseQuestion[]
+  alignedSentencePairs AlignedSentencePair[]
+}
+
+model AlignedSentencePair {
+  id         String   @id @default(uuid())
+  orderIndex Int
+  en         String   @db.Text
+  zh         String   @db.Text
+
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([documentId])
+  @@index([documentId, orderIndex])
+}
+
+model Paragraph {
+  id         String    @id @default(uuid())
+  content    String    @db.Text
+  orderIndex Int
+  document   Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  documentId String
+  sentences  Sentence[]
+
+  @@index([documentId])
+}
+
+model Sentence {
+  id               String    @id @default(uuid())
+  content          String    @db.Text
+  translationZh    String?   @db.Text
+  orderIndex       Int
+  paragraph        Paragraph @relation(fields: [paragraphId], references: [id], onDelete: Cascade)
+  paragraphId      String
+  userWords        UserWord[]
+  exerciseQuestions ExerciseQuestion[]
+
+  @@index([paragraphId])
+}
+
+model UserWord {
+  id               String    @id @default(uuid())
+  word             String
+  translation      String?
+  definition       String?   @db.Text
+  status           String    @default("NEW")
+  category         String?   // 单词分类：动词、名词、形容词等
+  sourceSentenceId String?
+  sourceSentence   Sentence? @relation(fields: [sourceSentenceId], references: [id], onDelete: SetNull)
+  savedSentences   SavedSentence[]
+  
+  // SRS 算法字段
+  interval         Int      @default(0)
+  difficulty       Float    @default(2.5)
+  reps             Int      @default(0)
+  
+  nextReviewAt     DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([word])
+  @@index([category])
+}
+
+// 新增：查词持久化缓存模型
+model DictionaryEntry {
+  id           String   @id @default(uuid())
+  word         String   @unique
+  phonetic     String?
+  translation  String?  @db.Text
+  definitionZh String?  @db.Text
+  data         Json     // 存储完整的结构化 JSON 数据（包括 phonetics, meanings 等）
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([word])
+}
+
+enum QuestionType {
+  SCRAMBLE
+  CHOICE
+  SENTENCE_COMPLETION
+  WORD_MATCHING
+}
+
+enum SavedSentenceSource {
+  USER
+  SUGGESTED
+  EVAL
+}
+
+model SavedSentence {
+  id        String             @id @default(uuid())
+  word      String
+  scene     String
+  sentence  String             @db.Text
+  source    SavedSentenceSource @default(USER)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  userWord  UserWord           @relation(fields: [word], references: [word], onDelete: Cascade)
+
+  @@unique([word, scene, sentence])
+  @@index([word])
+  @@index([word, scene])
+}
+
+model ExerciseQuestion {
+  id              String       @id @default(uuid())
+  type            QuestionType
+  promptZh        String       @db.Text
+  answerEn        String       @db.Text
+  scrambledTokens String[]     
+  blankedEn       String?      @db.Text 
+  options         String[]     
+  
+  // 新增：用于存储复杂的题目结构（干扰项、空格信息等）
+  structuredData  Json?        
+
+  documentId      String
+  document        Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sentenceId      String
+  sentence        Sentence     @relation(fields: [sentenceId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([documentId])
+  @@index([sentenceId])
+}

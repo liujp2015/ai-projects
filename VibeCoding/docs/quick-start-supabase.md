@@ -19,9 +19,12 @@ postgresql://postgres:your-password@db.xxx.supabase.co:5432/postgres
 1. 访问 [railway.app](https://railway.app/) 注册
 2. New Project → Deploy from GitHub → 选择仓库
 3. **Root Directory**: `backend`
-4. 在 Variables 添加环境变量：
+4. 在 Variables 添加环境变量（**包含 Node 18 设置**）：
 
 ```env
+# 固定 Node 版本（Railway/Nixpacks）
+NIXPACKS_NODE_VERSION=18
+
 # Supabase 数据库
 DATABASE_URL=postgresql://postgres:your-password@db.xxx.supabase.co:5432/postgres
 DIRECT_URL=postgresql://postgres:your-password@db.xxx.supabase.co:5432/postgres

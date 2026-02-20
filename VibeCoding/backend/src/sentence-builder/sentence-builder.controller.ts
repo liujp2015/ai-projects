@@ -1,6 +1,5 @@
 import { Body, Controller, Delete, Get, Post, Query, Param } from '@nestjs/common';
 import { SentenceBuilderService, SceneLexicon } from './sentence-builder.service';
-import { SavedSentenceSource } from '@prisma/client';
 
 @Controller('sentence-builder')
 export class SentenceBuilderController {
@@ -44,7 +43,7 @@ export class SentenceBuilderController {
   @Post('saved')
   async save(
     @Body()
-    body: { word: string; scene: string; sentence: string; source?: SavedSentenceSource | string },
+    body: { word: string; scene: string; sentence: string; source?: 'USER' | 'SUGGESTED' | 'EVAL' | string },
   ) {
     return this.service.saveSentence(body);
   }

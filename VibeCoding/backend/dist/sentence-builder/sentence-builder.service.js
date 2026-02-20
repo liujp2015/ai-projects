@@ -273,9 +273,9 @@ ${JSON.stringify(payload.allOptions, null, 2)}
         if (!this.sentenceContainsWord(sentence, word)) {
             throw new Error(`sentence must contain word: ${word}`);
         }
-        const source = String(input.source ?? 'USER').toUpperCase() ?? 'USER';
+        const sourceRaw = String(input.source ?? 'USER').toUpperCase();
         const allowed = ['USER', 'SUGGESTED', 'EVAL'];
-        const finalSource = allowed.includes(source) ? source : 'USER';
+        const finalSource = (allowed.includes(sourceRaw) ? sourceRaw : 'USER');
         await this.prisma.userWord.upsert({
             where: { word },
             create: { word, status: 'LEARNING' },

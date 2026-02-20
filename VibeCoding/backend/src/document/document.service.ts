@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import * as pdfjs from 'pdfjs-dist';
 import { OCRService } from '../ai/ocr.service';
 import { AIService } from '../ai/ai.service';
-import { Prisma } from '@prisma/client';
+// Prisma namespace types are not needed here; we use the generated client via PrismaService.
 
 @Injectable()
 export class DocumentService {
@@ -401,19 +401,17 @@ export class DocumentService {
       data: sentenceData,
     });
 
-    // Also write to the new AlignedSentencePair table (raw SQL, since Prisma Client may not include this model)
-    const alignedValues = alignedPairs
-      .map(
-        (pair, index) =>
-          Prisma.sql`(${Prisma.raw('gen_random_uuid()')}, ${index}, ${pair.en}, ${pair.zh}, ${documentId}, NOW(), NOW())`,
-      );
-
-    if (alignedValues.length > 0) {
-      await this.prisma.$executeRaw(
-        Prisma.sql`INSERT INTO "AlignedSentencePair" ("id", "orderIndex", "en", "zh", "documentId", "createdAt", "updatedAt") VALUES ${Prisma.join(
-          alignedValues,
-        )}`,
-      );
+    // 使用 Prisma Client 直接写入 AlignedSentencePair 表（schema.prisma 已定义该模型）
+    if (alignedPairs.length > 0) {
+      await this.prisma.alignedSentencePair.createMany({
+        data: alignedPairs.map((pair, index) => ({
+          orderIndex: index,
+          en: pair.en,
+          zh: pair.zh,
+          documentId,
+          // id / createdAt / updatedAt 使用数据库或 Prisma 默认值
+        })),
+      });
     }
 
     this.logger.log(`Successfully realigned ${documentId} into ${alignedPairs.length} sentences`);
@@ -527,11 +525,11 @@ export class DocumentService {
 
     const excludeSet = new Set(exclude.map((e) => e.toLowerCase()));
     const allWords = Array.from(new Set(sentences.flatMap((s) => this.tokenizeForTest(s.content))));
-    const candidates = allWords
-      .map((w) => w.trim())
-      .filter((w) => w.length >= 4 && !excludeSet.has(w.toLowerCase()));
+    const candidates: string[] = allWords
+      .map((w: string) => w.trim())
+      .filter((w: string) => w.length >= 4 && !excludeSet.has(w.toLowerCase()));
 
-    const picked = this.shuffleArray(candidates).slice(0, count);
+    const picked: string[] = this.shuffleArray<string>(candidates).slice(0, count);
 
     // If not enough distractors in this doc, pad with safe generic words.
     // (Ensure we still return exactly `count` items and avoid duplicates/excludes.)

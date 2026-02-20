@@ -1,0 +1,27 @@
+# 数据库配置说明
+# 请手动创建或编辑 backend/.env 文件，内容如下：
+
+DATABASE_URL="postgresql://postgres:123456@localhost:5432/rebate_db"
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+
+JWT_SECRET=rebate-discount-secret-key-2024-change-in-production
+JWT_EXPIRES_IN=1h
+JWT_REFRESH_SECRET=rebate-discount-refresh-secret-key-2024-change-in-production
+JWT_REFRESH_EXPIRES_IN=7d
+
+PORT=3000
+NODE_ENV=development
+
+STORAGE_TYPE=aliyun
+STORAGE_ACCESS_KEY=
+STORAGE_SECRET_KEY=
+STORAGE_BUCKET=
+STORAGE_REGION=
+
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+

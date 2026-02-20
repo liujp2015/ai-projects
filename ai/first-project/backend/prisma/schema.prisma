@@ -1,0 +1,235 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String   @id @default(uuid())
+  email             String   @unique
+  username          String?  @unique
+  nickname          String?
+  avatar            String?
+  password          String
+  totalPoints       Int      @default(0)
+  remainingPoints   Int      @default(0)
+  balance           Decimal  @default(0) @db.Decimal(10, 2)
+  isAdmin           Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  roles             UserRole[]
+  points            PointRecord[]
+  accessTokens      AccessToken[]
+  refreshTokens     RefreshToken[]
+  orders            Order[]
+  clickRecords      ClickRecord[]
+}
+
+model PointRecord {
+  id          String   @id @default(uuid())
+  userId      String
+  points      Int
+  type        String
+  description String?
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Product {
+  id            String    @id @default(uuid())
+  title         String
+  description   String?   @db.Text
+  originalPrice Decimal   @db.Decimal(10, 2)
+  discountPrice Decimal   @db.Decimal(10, 2)
+  link          String
+  isHidden      Boolean   @default(false)
+  storageId     String?
+  brandId       String?
+  categoryId   String?
+  platform      String?
+  keywords      String?
+  sortOrder     Int       @default(0)
+  isTop         Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  endTime       DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  brand         Brand?    @relation(fields: [brandId], references: [id])
+  category      Category? @relation(fields: [categoryId], references: [id])
+  storage       Storage? @relation(fields: [storageId], references: [id])
+  orders        Order[]
+  clickRecords  ClickRecord[]
+}
+
+model Brand {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?   @db.Text
+  logo        String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products    Product[]
+}
+
+model Category {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?   @db.Text
+  parentId    String?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  parent      Category? @relation("CategoryTree", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryTree")
+  products    Product[]
+}
+
+model Order {
+  id            String   @id @default(uuid())
+  userId        String?
+  productId     String?
+  clickId       String?
+  orderNumber   String   @unique
+  platform      String
+  amount        Decimal  @db.Decimal(10, 2)
+  status        String
+  pointsEarned  Int      @default(0)
+  syncedAt      DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User?    @relation(fields: [userId], references: [id])
+  product       Product? @relation(fields: [productId], references: [id])
+
+  @@index([clickId])
+  @@index([userId])
+}
+
+model Banner {
+  id          String   @id @default(uuid())
+  title       String?
+  imageUrl    String
+  link        String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Storage {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  type        String
+  endpoint    String?
+  accessKey   String
+  secretKey   String
+  bucket      String?
+  region      String?
+  config      Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products    Product[]
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  code        String   @unique
+  module      String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles       RolePermission[]
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  users       UserRole[]
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime   @default(now())
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+}
+
+model UserRole {
+  id        String   @id @default(uuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+model AccessToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SiteConfig {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value        String
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model ClickRecord {
+  id        String   @id @default(uuid())
+  userId    String
+  productId String
+  clickId   String   @unique
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([clickId])
+  @@index([userId])
+}
+
+
+

@@ -54,6 +54,18 @@ postgresql://postgres:your-password-here@db.abcdefghijklmnop.supabase.co:5432/po
 
 ## 第二步：部署后端到 Railway
 
+### 2.0 Node 版本（重要）
+
+Railway 当前经常会默认使用较新的 Node 版本，但你的后端需要 **Node.js 18**。
+
+请在 Railway 后端服务的 **Variables** 里新增：
+
+```env
+NIXPACKS_NODE_VERSION=18
+```
+
+同时本仓库在 `backend/.nvmrc` 与 `backend/package.json#engines` 也已声明为 18，用于让构建器自动选择正确版本。
+
 ### 2.1 准备代码仓库
 
 确保你的代码已推送到 GitHub：

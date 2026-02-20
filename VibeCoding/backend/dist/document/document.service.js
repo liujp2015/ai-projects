@@ -50,7 +50,6 @@ const prisma_service_1 = require("../prisma/prisma.service");
 const pdfjs = __importStar(require("pdfjs-dist"));
 const ocr_service_1 = require("../ai/ocr.service");
 const ai_service_1 = require("../ai/ai.service");
-const client_1 = require("@prisma/client");
 let DocumentService = DocumentService_1 = class DocumentService {
     prisma;
     ocrService;
@@ -337,10 +336,15 @@ let DocumentService = DocumentService_1 = class DocumentService {
         await this.prisma.sentence.createMany({
             data: sentenceData,
         });
-        const alignedValues = alignedPairs
-            .map((pair, index) => client_1.Prisma.sql `(${client_1.Prisma.raw('gen_random_uuid()')}, ${index}, ${pair.en}, ${pair.zh}, ${documentId}, NOW(), NOW())`);
-        if (alignedValues.length > 0) {
-            await this.prisma.$executeRaw(client_1.Prisma.sql `INSERT INTO "AlignedSentencePair" ("id", "orderIndex", "en", "zh", "documentId", "createdAt", "updatedAt") VALUES ${client_1.Prisma.join(alignedValues)}`);
+        if (alignedPairs.length > 0) {
+            await this.prisma.alignedSentencePair.createMany({
+                data: alignedPairs.map((pair, index) => ({
+                    orderIndex: index,
+                    en: pair.en,
+                    zh: pair.zh,
+                    documentId,
+                })),
+            });
         }
         this.logger.log(`Successfully realigned ${documentId} into ${alignedPairs.length} sentences`);
         const mergedZh = alignedPairs.map(p => p.zh).join('\n');

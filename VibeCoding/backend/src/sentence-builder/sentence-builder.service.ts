@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { getDeepSeekConfig } from '../config/deepseek.config';
 import { PrismaService } from '../prisma/prisma.service';
-import { SavedSentenceSource } from '@prisma/client';
 
 export type SceneLexiconToken = { id: string; text: string };
 
@@ -310,7 +309,7 @@ ${JSON.stringify(payload.allOptions, null, 2)}
     word: string;
     scene: string;
     sentence: string;
-    source?: SavedSentenceSource | string;
+    source?: 'USER' | 'SUGGESTED' | 'EVAL' | string;
   }) {
     const word = this.normalizeWord(input.word);
     const scene = this.normalizeScene(input.scene);
@@ -323,9 +322,9 @@ ${JSON.stringify(payload.allOptions, null, 2)}
       throw new Error(`sentence must contain word: ${word}`);
     }
 
-    const source = (String(input.source ?? 'USER').toUpperCase() as SavedSentenceSource) ?? 'USER';
-    const allowed: SavedSentenceSource[] = ['USER', 'SUGGESTED', 'EVAL'];
-    const finalSource: SavedSentenceSource = allowed.includes(source) ? source : 'USER';
+    const sourceRaw = String(input.source ?? 'USER').toUpperCase();
+    const allowed = ['USER', 'SUGGESTED', 'EVAL'] as const;
+    const finalSource = (allowed.includes(sourceRaw as any) ? sourceRaw : 'USER') as (typeof allowed)[number];
 
     // Ensure the word exists in wordbook (create if absent)
     await this.prisma.userWord.upsert({

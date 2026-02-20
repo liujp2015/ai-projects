@@ -72,6 +72,8 @@ export type UserWord = {
     };
   };
   nextReviewAt: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export async function lookupWord(word: string): Promise<WordDefinition> {

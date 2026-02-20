@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as mammoth from 'mammoth';
 import { PrismaService } from '../prisma/prisma.service';
-import * as pdfjs from 'pdfjs-dist';
 import { OCRService } from '../ai/ocr.service';
 import { AIService } from '../ai/ai.service';
 // Prisma namespace types are not needed here; we use the generated client via PrismaService.
@@ -22,6 +21,12 @@ export class DocumentService {
 
     try {
       if (mimeType === 'application/pdf') {
+        // Dynamic import for ES Module compatibility
+        const pdfjs = await import('pdfjs-dist');
+        // Disable worker for Node.js environment
+        if (pdfjs.GlobalWorkerOptions) {
+          pdfjs.GlobalWorkerOptions.workerSrc = '';
+        }
         const loadingTask = pdfjs.getDocument({ data: new Uint8Array(file.buffer) });
         const pdf = await loadingTask.promise;
         let fullText = '';

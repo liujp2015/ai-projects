@@ -82,10 +82,10 @@ async function proxyRequest(req: NextRequest, method: string) {
     });
 
     // 检查是否是流式响应（如 TTS 音频流）
-    const contentType = res.headers.get('content-type') || '';
-    const isStream = contentType.includes('audio') || 
-                     contentType.includes('stream') ||
-                     contentType.includes('octet-stream');
+    const responseContentType = res.headers.get('content-type') || '';
+    const isStream = responseContentType.includes('audio') || 
+                     responseContentType.includes('stream') ||
+                     responseContentType.includes('octet-stream');
 
     // 复制响应头（排除一些不需要的）
     const responseHeaders = new Headers();

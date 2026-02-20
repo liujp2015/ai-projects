@@ -47,7 +47,6 @@ exports.DocumentService = void 0;
 const common_1 = require("@nestjs/common");
 const mammoth = __importStar(require("mammoth"));
 const prisma_service_1 = require("../prisma/prisma.service");
-const pdfjs = __importStar(require("pdfjs-dist"));
 const ocr_service_1 = require("../ai/ocr.service");
 const ai_service_1 = require("../ai/ai.service");
 let DocumentService = DocumentService_1 = class DocumentService {
@@ -65,6 +64,10 @@ let DocumentService = DocumentService_1 = class DocumentService {
         const mimeType = file.mimetype;
         try {
             if (mimeType === 'application/pdf') {
+                const pdfjs = await import('pdfjs-dist');
+                if (pdfjs.GlobalWorkerOptions) {
+                    pdfjs.GlobalWorkerOptions.workerSrc = '';
+                }
                 const loadingTask = pdfjs.getDocument({ data: new Uint8Array(file.buffer) });
                 const pdf = await loadingTask.promise;
                 let fullText = '';

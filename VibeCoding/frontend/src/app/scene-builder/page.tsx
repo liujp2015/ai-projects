@@ -98,7 +98,6 @@ function SceneBuilderContent() {
     try {
       const res = await fetch('/api/sentence-builder/scene', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scene, word: word.trim() || undefined, targetUserLevel: 'A2' }),
       });
       if (!res.ok) {
@@ -166,7 +165,6 @@ function SceneBuilderContent() {
     try {
       const res = await fetch('/api/sentence-builder/evaluate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scene, word: word.trim() || undefined, sentence, userLevel: 'A2' }),
       });
       if (!res.ok) {
@@ -227,7 +225,6 @@ function SceneBuilderContent() {
         setLoadingNext(true);
         const res = await fetch('/api/sentence-builder/next-token', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             scene,
             currentTokens: orderedSelectedTokens,
@@ -391,7 +388,6 @@ function SceneBuilderContent() {
     try {
       const res = await fetch('/api/sentence-builder/saved', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ word: w, scene: sc, sentence: sent, source }),
       });
       if (!res.ok) {

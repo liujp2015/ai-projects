@@ -1,15 +1,8 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
 
-// 统一的 fetch 配置，确保跨域请求正常工作
-const defaultFetchOptions: RequestInit = {
-  credentials: 'include', // 允许携带 cookies 和认证信息
-  mode: 'cors', // 明确使用 CORS 模式
-};
-
-// 创建带默认配置的 fetch 包装函数
+// 简化的 fetch 包装函数，通过 Next.js API Route 代理（同源请求，不需要 CORS）
 async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const mergedOptions: RequestInit = {
-    ...defaultFetchOptions,
     ...options,
   };
   
@@ -25,7 +18,6 @@ async function apiFetch(url: string, options: RequestInit = {}): Promise<Respons
     mergedOptions.headers = {
       ...options.headers,
     };
-    // 确保删除 Content-Type，如果用户错误地设置了它
     if (mergedOptions.headers) {
       delete (mergedOptions.headers as any)['Content-Type'];
       delete (mergedOptions.headers as any)['content-type'];
@@ -37,7 +29,6 @@ async function apiFetch(url: string, options: RequestInit = {}): Promise<Respons
       ...options.headers,
     };
   } else {
-    // 已有 Content-Type：直接使用
     mergedOptions.headers = {
       ...options.headers,
     };
@@ -73,7 +64,7 @@ export type DocumentDetail = DocumentItem & {
 };
 
 export async function fetchDocuments(): Promise<DocumentItem[]> {
-  const res = await apiFetch(`${API_BASE_URL}/documents`, { cache: 'no-store' });
+  const res = await apiFetch('/api/documents', { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to fetch documents: ${res.status}`);
   return res.json();
 }
@@ -123,13 +114,13 @@ export type UserWord = {
 };
 
 export async function lookupWord(word: string): Promise<WordDefinition> {
-  const res = await apiFetch(`${API_BASE_URL}/dictionary/${encodeURIComponent(word)}`);
+  const res = await apiFetch(`/api/dictionary/${encodeURIComponent(word)}`);
   if (!res.ok) throw new Error(`Failed to lookup word: ${res.status}`);
   return res.json();
 }
 
 export async function fetchUserWords(): Promise<UserWord[]> {
-  const res = await apiFetch(`${API_BASE_URL}/user-words`);
+  const res = await apiFetch('/api/user-words');
   if (!res.ok) throw new Error(`Failed to fetch user words: ${res.status}`);
   return res.json();
 }
@@ -141,7 +132,7 @@ export async function upsertUserWord(
   translation?: string,
   definition?: string
 ): Promise<UserWord> {
-  const res = await apiFetch(`${API_BASE_URL}/user-words`, {
+  const res = await apiFetch('/api/user-words', {
     method: 'POST',
     body: JSON.stringify({ word, status, sourceSentenceId, translation, definition }),
   });
@@ -150,14 +141,14 @@ export async function upsertUserWord(
 }
 
 export async function deleteUserWord(word: string): Promise<void> {
-  const res = await apiFetch(`${API_BASE_URL}/user-words/${encodeURIComponent(word)}`, {
+  const res = await apiFetch(`/api/user-words/${encodeURIComponent(word)}`, {
     method: 'DELETE',
   });
   if (!res.ok) throw new Error(`Failed to delete user word: ${res.status}`);
 }
 
 export async function updateUserWordStatus(word: string, status: string): Promise<UserWord> {
-  const res = await apiFetch(`${API_BASE_URL}/user-words/${encodeURIComponent(word)}/status`, {
+  const res = await apiFetch(`/api/user-words/${encodeURIComponent(word)}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ status }),
   });
@@ -166,7 +157,7 @@ export async function updateUserWordStatus(word: string, status: string): Promis
 }
 
 export async function updateUserWordCategory(word: string, category: string | null): Promise<UserWord> {
-  const res = await apiFetch(`${API_BASE_URL}/user-words/${encodeURIComponent(word)}/category`, {
+  const res = await apiFetch(`/api/user-words/${encodeURIComponent(word)}/category`, {
     method: 'PATCH',
     body: JSON.stringify({ category }),
   });
@@ -175,7 +166,7 @@ export async function updateUserWordCategory(word: string, category: string | nu
 }
 
 export async function fillMissingTranslations(): Promise<{ total: number; processed: number }> {
-  const res = await apiFetch(`${API_BASE_URL}/user-words/fill-translations`, {
+  const res = await apiFetch('/api/user-words/fill-translations', {
     method: 'POST',
   });
   if (!res.ok) throw new Error(`Failed to fill translations: ${res.status}`);
@@ -183,13 +174,13 @@ export async function fillMissingTranslations(): Promise<{ total: number; proces
 }
 
 export async function fetchReviewQueue(): Promise<UserWord[]> {
-  const res = await apiFetch(`${API_BASE_URL}/user-words/review/queue`, { cache: 'no-store' });
+  const res = await apiFetch('/api/user-words/review/queue', { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to fetch review queue: ${res.status}`);
   return res.json();
 }
 
 export async function submitReview(word: string, quality: number): Promise<UserWord> {
-  const res = await apiFetch(`${API_BASE_URL}/user-words/review/submit`, {
+  const res = await apiFetch('/api/user-words/review/submit', {
     method: 'POST',
     body: JSON.stringify({ word, quality }),
   });
@@ -198,7 +189,8 @@ export async function submitReview(word: string, quality: number): Promise<UserW
 }
 
 export function getTTSUrl(text: string): string {
-  return `${API_BASE_URL}/tts/stream?text=${encodeURIComponent(text)}`;
+  // TTS 流式响应，直接使用后端 URL（或通过代理）
+  return `/api/tts/stream?text=${encodeURIComponent(text)}`;
 }
 
 export type AIValidationResult = {
@@ -211,7 +203,7 @@ export type AIValidationResult = {
 };
 
 export async function validateSentence(word: string, scenario: string, sentence: string): Promise<AIValidationResult> {
-  const res = await apiFetch(`${API_BASE_URL}/ai/validate-sentence`, {
+  const res = await apiFetch('/api/ai/validate-sentence', {
     method: 'POST',
     body: JSON.stringify({ word, scenario, sentence }),
   });
@@ -230,13 +222,13 @@ export type Exercise = {
 };
 
 export async function fetchExercises(documentId: string): Promise<Exercise[]> {
-  const res = await apiFetch(`${API_BASE_URL}/exercises/document/${documentId}`, { cache: 'no-store' });
+  const res = await apiFetch(`/api/exercises/document/${documentId}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to fetch exercises: ${res.status}`);
   return res.json();
 }
 
 export async function fetchDocument(id: string): Promise<DocumentDetail> {
-  const res = await apiFetch(`${API_BASE_URL}/documents/${id}`, { cache: 'no-store' });
+  const res = await apiFetch(`/api/documents/${id}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to fetch document: ${res.status}`);
   return res.json();
 }
@@ -246,7 +238,7 @@ export async function uploadDocument(file: File, title?: string): Promise<Docume
   form.append('file', file);
   if (title) form.append('title', title);
 
-  const res = await apiFetch(`${API_BASE_URL}/documents/upload`, {
+  const res = await apiFetch('/api/documents/upload', {
     method: 'POST',
     body: form,
   });
@@ -264,7 +256,7 @@ export async function uploadImages(files: File[], title?: string): Promise<Docum
   files.forEach((file) => form.append('files', file));
   if (title) form.append('title', title);
 
-  const res = await apiFetch(`${API_BASE_URL}/documents/upload-images`, {
+  const res = await apiFetch('/api/documents/upload-images', {
     method: 'POST',
     body: form,
   });
@@ -278,7 +270,7 @@ export async function uploadImages(files: File[], title?: string): Promise<Docum
 }
 
 export async function createManualDocument(title: string, content: string): Promise<DocumentItem> {
-  const res = await apiFetch(`${API_BASE_URL}/documents/manual`, {
+  const res = await apiFetch('/api/documents/manual', {
     method: 'POST',
     body: JSON.stringify({ title, content }),
   });
@@ -292,7 +284,7 @@ export async function createManualDocument(title: string, content: string): Prom
 }
 
 export async function appendText(id: string, text: string): Promise<DocumentDetail> {
-  const res = await apiFetch(`${API_BASE_URL}/documents/${id}/append-text`, {
+  const res = await apiFetch(`/api/documents/${id}/append-text`, {
     method: 'POST',
     body: JSON.stringify({ text }),
   });
@@ -304,7 +296,7 @@ export async function appendImages(id: string, files: File[]): Promise<DocumentD
   const form = new FormData();
   files.forEach((file) => form.append('files', file));
 
-  const res = await apiFetch(`${API_BASE_URL}/documents/${id}/append-images`, {
+  const res = await apiFetch(`/api/documents/${id}/append-images`, {
     method: 'POST',
     body: form,
   });
@@ -332,7 +324,7 @@ export type ExerciseQuestion = {
 };
 
 export async function generateQuestionBank(id: string, force: boolean = false): Promise<{ total: number; generated: number }> {
-  const res = await apiFetch(`${API_BASE_URL}/documents/${id}/questions/generate`, {
+  const res = await apiFetch(`/api/documents/${id}/questions/generate`, {
     method: 'POST',
     body: JSON.stringify({ force }),
   });
@@ -341,13 +333,13 @@ export async function generateQuestionBank(id: string, force: boolean = false): 
 }
 
 export async function fetchQuestionBank(id: string, limit: number = 20): Promise<ExerciseQuestion[]> {
-  const res = await apiFetch(`${API_BASE_URL}/documents/${id}/questions?limit=${limit}`);
+  const res = await apiFetch(`/api/documents/${id}/questions?limit=${limit}`);
   if (!res.ok) throw new Error(`Failed to fetch questions: ${res.status}`);
   return res.json();
 }
 
 export async function translateMissingSentences(id: string): Promise<{ total: number; translated: number }> {
-  const res = await apiFetch(`${API_BASE_URL}/documents/${id}/translate/missing`, {
+  const res = await apiFetch(`/api/documents/${id}/translate/missing`, {
     method: 'POST',
   });
   if (!res.ok) throw new Error(`Failed to translate: ${res.status}`);
@@ -355,7 +347,7 @@ export async function translateMissingSentences(id: string): Promise<{ total: nu
 }
 
 export async function translateAlignRebuild(id: string): Promise<{ total: number; status: string }> {
-  const res = await apiFetch(`${API_BASE_URL}/documents/${id}/translate/align-rebuild`, {
+  const res = await apiFetch(`/api/documents/${id}/translate/align-rebuild`, {
     method: 'POST',
   });
   if (!res.ok) throw new Error(`Failed to align-rebuild translation: ${res.status}`);
@@ -363,13 +355,13 @@ export async function translateAlignRebuild(id: string): Promise<{ total: number
 }
 
 export async function fetchDocumentTranslation(id: string): Promise<DocumentTranslation> {
-  const res = await apiFetch(`${API_BASE_URL}/documents/${id}/translation`);
+  const res = await apiFetch(`/api/documents/${id}/translation`);
   if (!res.ok) throw new Error(`Failed to fetch translation: ${res.status}`);
   return res.json();
 }
 
 export async function resetDatabase(): Promise<{ message: string; timestamp: string }> {
-  const res = await apiFetch(`${API_BASE_URL}/admin/reset`, {
+  const res = await apiFetch('/api/admin/reset', {
     method: 'POST',
   });
   if (!res.ok) throw new Error(`Failed to reset database: ${res.status}`);

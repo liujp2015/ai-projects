@@ -35,6 +35,10 @@ export async function fetchDocuments(): Promise<DocumentItem[]> {
 export type WordDefinition = {
   word: string;
   phonetic?: string;
+  phonetics?: Array<{
+    text?: string;
+    audio?: string;
+  }>;
   translation?: string; // 新增中文翻译
   definitionZh?: string; // 新增中文详细释义
   meanings: Array<{

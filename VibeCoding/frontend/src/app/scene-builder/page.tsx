@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 type Token = { id: string; text: string };
@@ -44,7 +44,7 @@ function buildSentence(selected: Selected): string {
   return /[.!?]$/.test(raw) ? raw : raw + '.';
 }
 
-export default function SceneBuilderPage() {
+function SceneBuilderContent() {
   const searchParams = useSearchParams();
   const [scene, setScene] = useState('机场值机');
   const [word, setWord] = useState('');
@@ -892,4 +892,20 @@ export default function SceneBuilderPage() {
   );
 }
 
+export default function SceneBuilderPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 py-8 px-4">
+        <div className="max-w-6xl mx-auto">
+          <div className="bg-white/95 rounded-3xl shadow-2xl border border-slate-200 p-8 text-center">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <p className="mt-4 text-gray-600">加载中...</p>
+          </div>
+        </div>
+      </div>
+    }>
+      <SceneBuilderContent />
+    </Suspense>
+  );
+}
 

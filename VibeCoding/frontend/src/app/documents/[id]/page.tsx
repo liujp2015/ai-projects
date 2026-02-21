@@ -708,18 +708,18 @@ export default function DocumentDetailPage() {
             <div className="space-y-8">
               {(!showTest && !showWordQuiz) ? (
                 <>
-                  <div className="flex items-center justify-between bg-blue-50 p-6 rounded-3xl border border-blue-100">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-blue-50 p-4 md:p-6 rounded-2xl md:rounded-3xl border border-blue-100">
                     <div>
                       <h2 className="text-blue-800 font-bold">学习内容对照</h2>
                       <p className="text-sm text-blue-600 mt-1">
                         基于图片识别的结构化对照数据
                       </p>
                     </div>
-                    <div className="flex gap-3">
+                    <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 md:gap-3">
                       <button
                         onClick={handleGenerateQuestions}
                         disabled={generatingQuestions}
-                        className="px-6 py-2 bg-indigo-600 text-white rounded-full text-sm font-bold shadow-md hover:bg-indigo-700 transition-all disabled:opacity-50"
+                        className="px-3 md:px-6 py-2 bg-indigo-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-indigo-700 transition-all disabled:opacity-50"
                       >
                         {generatingQuestions ? '生成中...' : '生成题库（DeepSeek）'}
                       </button>

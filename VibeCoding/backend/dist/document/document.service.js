@@ -659,7 +659,17 @@ let DocumentService = DocumentService_1 = class DocumentService {
             where: { documentId },
             orderBy: { createdAt: 'desc' },
         });
-        return this.shuffleArray(questions).slice(0, limit);
+        const shuffled = questions.map((q) => {
+            const opts = Array.isArray(q.options) ? q.options.map((x) => String(x)) : [];
+            const ans = String(q.answer ?? '').trim();
+            let normalizedOpts = opts;
+            if (ans && !normalizedOpts.some((o) => String(o).trim() === ans)) {
+                normalizedOpts = [ans, ...normalizedOpts].slice(0, 4);
+            }
+            const shuffledOpts = this.shuffleArray(normalizedOpts);
+            return { ...q, options: shuffledOpts };
+        });
+        return this.shuffleArray(shuffled).slice(0, limit);
     }
     async extractWordsFromDocument(documentId) {
         try {

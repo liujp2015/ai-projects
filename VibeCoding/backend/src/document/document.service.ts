@@ -801,7 +801,23 @@ export class DocumentService {
       where: { documentId },
       orderBy: { createdAt: 'desc' },
     });
-    return this.shuffleArray(questions).slice(0, limit);
+
+    // 保险：每次返回时都随机打乱 options，避免正确答案总在第一个
+    const shuffled = questions.map((q: any) => {
+      const opts: string[] = Array.isArray(q.options) ? q.options.map((x: any) => String(x)) : [];
+      const ans = String(q.answer ?? '').trim();
+
+      // 如果 answer 不在 options 中，强制加入
+      let normalizedOpts = opts;
+      if (ans && !normalizedOpts.some((o) => String(o).trim() === ans)) {
+        normalizedOpts = [ans, ...normalizedOpts].slice(0, 4);
+      }
+
+      const shuffledOpts = this.shuffleArray<string>(normalizedOpts);
+      return { ...q, options: shuffledOpts };
+    });
+
+    return this.shuffleArray(shuffled).slice(0, limit);
   }
 
   /**

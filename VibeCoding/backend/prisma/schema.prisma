@@ -22,6 +22,8 @@ model Document {
   paragraphs           Paragraph[]
   exerciseQuestions    ExerciseQuestion[]
   alignedSentencePairs AlignedSentencePair[]
+  extractedWords       ExtractedWord[]
+  wordQuizQuestions    WordQuizQuestion[]
 }
 
 model AlignedSentencePair {
@@ -109,6 +111,28 @@ enum QuestionType {
   WORD_MATCHING
 }
 
+enum WordQuizType {
+  ZH_TO_EN // 根据中文选英文单词
+  EN_TO_ZH // 根据英文选中文意思
+}
+
+model WordQuizQuestion {
+  id              String       @id @default(uuid())
+  type            WordQuizType
+  prompt          String       @db.Text // 题目提示（中文或英文）
+  answer          String       @db.Text // 正确答案
+  options         String[]     // 选项列表
+  sentenceContext String?      @db.Text // 来源句子上下文（可选）
+  
+  documentId      String
+  document        Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([documentId])
+}
+
 enum SavedSentenceSource {
   USER
   SUGGESTED
@@ -142,7 +166,7 @@ model ExerciseQuestion {
   
   // 新增：用于存储复杂的题目结构（干扰项、空格信息等）
   structuredData  Json?        
-
+  
   documentId      String
   document        Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
   sentenceId      String
@@ -153,4 +177,52 @@ model ExerciseQuestion {
 
   @@index([documentId])
   @@index([sentenceId])
+}
+
+// 从句子中提取的词性（名词、动词、形容词等）
+model ExtractedWord {
+  id         String   @id @default(uuid())
+  word       String   // 单词
+  partOfSpeech String // 词性：noun, verb, adjective, adverb 等
+  translation String? // 中文翻译
+  sentence   String   @db.Text // 来源句子
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([documentId])
+  @@index([documentId, partOfSpeech])
+  @@index([partOfSpeech])
+}
+
+// 对话模型
+model Conversation {
+  id          String              @id @default(uuid())
+  title       String              // 对话标题
+  description String?             @db.Text // 对话描述
+  messages    ConversationMessage[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([createdAt])
+}
+
+// 对话消息模型
+model ConversationMessage {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  
+  speaker        String       // 说话者：A, B, Person1, Person2 等
+  content        String       @db.Text // 对话内容
+  orderIndex     Int          // 消息顺序
+  imageUrl       String?      // 原始图片 URL（如果有）
+  
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([conversationId])
+  @@index([conversationId, orderIndex])
 }

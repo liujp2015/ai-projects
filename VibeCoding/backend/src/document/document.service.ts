@@ -715,4 +715,195 @@ export class DocumentService {
     });
     return this.shuffleArray(questions).slice(0, limit);
   }
+
+  /**
+   * 基于提取的单词生成“句子单词测试题”（独立于 ExerciseQuestion）
+   */
+  async generateWordQuiz(documentId: string, force: boolean = false) {
+    const doc = await this.prisma.document.findUnique({
+      where: { id: documentId },
+      include: { extractedWords: true },
+    });
+
+    if (!doc) throw new Error('Document not found');
+
+    // 如果还没提取过单词，先提取一次（只针对核心句子）
+    let words = doc.extractedWords;
+    if (words.length === 0) {
+      await this.extractWordsFromDocument(documentId);
+      const updated = await this.prisma.document.findUnique({
+        where: { id: documentId },
+        include: { extractedWords: true },
+      });
+      words = updated?.extractedWords ?? [];
+    }
+
+    if (words.length === 0) {
+      throw new Error('未提取到可用于出题的单词，请先确保核心句子存在且可提取。');
+    }
+
+    if (force) {
+      await this.prisma.wordQuizQuestion.deleteMany({ where: { documentId } });
+    } else {
+      const existing = await this.prisma.wordQuizQuestion.count({ where: { documentId } });
+      if (existing > 0) {
+        return { total: existing, generated: 0 };
+      }
+    }
+
+    // 过滤：需要有中文翻译，否则无法生成 EN_TO_ZH
+    const usable = words.filter((w) => (w.translation ?? '').trim().length > 0);
+    if (usable.length === 0) {
+      throw new Error('提取到的单词缺少中文翻译，无法生成测试题。请先重新“提取词性”。');
+    }
+
+    // 分批调用，避免 prompt 过长
+    const batchSize = 15;
+    let generated = 0;
+
+    for (let i = 0; i < usable.length; i += batchSize) {
+      const batch = usable.slice(i, i + batchSize);
+      try {
+        const aiQuestions = await this.aiService.generateWordQuizQuestions(
+          batch.map((w) => ({
+            word: w.word,
+            translation: w.translation ?? '',
+            partOfSpeech: w.partOfSpeech,
+            sentence: w.sentence,
+          })),
+        );
+
+        if (Array.isArray(aiQuestions) && aiQuestions.length > 0) {
+          await this.prisma.wordQuizQuestion.createMany({
+            data: aiQuestions
+              .filter((q) => q && q.type && q.prompt && q.answer && Array.isArray(q.options))
+              .map((q) => ({
+                type: q.type,
+                prompt: String(q.prompt),
+                answer: String(q.answer),
+                options: (q.options as any[]).map((x) => String(x)),
+                sentenceContext: q.sentenceContext ? String(q.sentenceContext) : null,
+                documentId,
+              })),
+          });
+          generated += aiQuestions.length;
+        }
+      } catch (e: any) {
+        this.logger.error(`Failed to generate word quiz batch: ${e.message}`);
+      }
+    }
+
+    return { total: generated, generated };
+  }
+
+  async getWordQuiz(documentId: string, limit: number = 40) {
+    const questions = await this.prisma.wordQuizQuestion.findMany({
+      where: { documentId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return this.shuffleArray(questions).slice(0, limit);
+  }
+
+  /**
+   * 从文档的中英对照核心句子中提取词性并存入数据库
+   */
+  async extractWordsFromDocument(documentId: string) {
+    try {
+      const doc = await this.prisma.document.findUnique({
+        where: { id: documentId },
+      });
+
+      if (!doc) {
+        throw new Error('Document not found');
+      }
+
+      // 从中英对照文本中提取核心句子（与前端逻辑一致）
+      const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      
+      // 启发式区分句子和单词：包含空格且长度大于 15 的通常是句子
+      const sentences = zhLines
+        .map((zh, i) => ({ zh, en: enLines[i] }))
+        .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15))
+        .map(item => item.en); // 只提取英语句子
+      
+      if (sentences.length === 0) {
+        this.logger.warn(`No core sentences found in document ${documentId} (chineseText/englishText)`);
+        return { extracted: 0, message: 'No core sentences found in document' };
+      }
+
+      this.logger.log(`Extracting words from ${sentences.length} core sentences in document ${documentId}`);
+
+      // 分批处理，每批最多 50 个句子，避免 API 调用过大
+      const batchSize = 50;
+      const batches: string[][] = [];
+      for (let i = 0; i < sentences.length; i += batchSize) {
+        batches.push(sentences.slice(i, i + batchSize));
+      }
+
+      this.logger.log(`Processing ${batches.length} batches of sentences`);
+
+      // 调用 AI 提取词性（分批处理）
+      const allExtractedWords: Array<{ word: string; partOfSpeech: string; translation: string; sentence: string }> = [];
+      for (let i = 0; i < batches.length; i++) {
+        try {
+          this.logger.log(`Processing batch ${i + 1}/${batches.length} (${batches[i].length} sentences)`);
+          const batchWords = await this.aiService.extractWordsFromSentences(batches[i]);
+          allExtractedWords.push(...batchWords);
+        } catch (error: any) {
+          this.logger.error(`Failed to process batch ${i + 1}: ${error.message}`);
+          // 继续处理下一批，不中断整个流程
+        }
+      }
+
+      const extractedWords = allExtractedWords;
+
+      this.logger.log(`AI extracted ${extractedWords.length} words, saving to database...`);
+
+      // 删除该文档的旧数据
+      await this.prisma.extractedWord.deleteMany({
+        where: { documentId },
+      });
+
+      // 批量插入新数据
+      if (extractedWords.length > 0) {
+        await this.prisma.extractedWord.createMany({
+          data: extractedWords.map(w => ({
+            word: w.word,
+            partOfSpeech: w.partOfSpeech,
+            translation: w.translation || null,
+            sentence: w.sentence,
+            documentId,
+          })),
+        });
+        this.logger.log(`Successfully saved ${extractedWords.length} words to database`);
+      }
+
+      return {
+        extracted: extractedWords.length,
+        message: `Successfully extracted ${extractedWords.length} words`,
+      };
+    } catch (error: any) {
+      this.logger.error(`Failed to extract words from document ${documentId}: ${error.message}`);
+      this.logger.error(error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * 获取文档的提取词性列表
+   */
+  async getExtractedWords(documentId: string, partOfSpeech?: string) {
+    const where: any = { documentId };
+    if (partOfSpeech) {
+      where.partOfSpeech = partOfSpeech;
+    }
+
+    const words = await this.prisma.extractedWord.findMany({
+      where,
+      orderBy: { word: 'asc' },
+    });
+
+    return words;
+  }
 }

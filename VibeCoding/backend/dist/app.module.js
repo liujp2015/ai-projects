@@ -17,6 +17,7 @@ const user_word_module_1 = require("./user-word/user-word.module");
 const tts_module_1 = require("./tts/tts.module");
 const exercise_module_1 = require("./exercise/exercise.module");
 const sentence_builder_module_1 = require("./sentence-builder/sentence-builder.module");
+const conversation_module_1 = require("./conversation/conversation.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -30,6 +31,7 @@ exports.AppModule = AppModule = __decorate([
             tts_module_1.TTSModule,
             exercise_module_1.ExerciseModule,
             sentence_builder_module_1.SentenceBuilderModule,
+            conversation_module_1.ConversationModule,
         ],
         controllers: [app_controller_1.AppController],
         providers: [app_service_1.AppService],

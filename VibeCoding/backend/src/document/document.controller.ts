@@ -99,5 +99,38 @@ export class DocumentController {
   ) {
     return this.documentService.getQuestions(id, limit ? parseInt(limit) : 20);
   }
+
+  @Post(':id/extract-words')
+  async extractWords(@Param('id') id: string) {
+    try {
+      return await this.documentService.extractWordsFromDocument(id);
+    } catch (error: any) {
+      throw new Error(`词性提取失败: ${error.message}`);
+    }
+  }
+
+  @Get(':id/extracted-words')
+  async getExtractedWords(
+    @Param('id') id: string,
+    @Query('partOfSpeech') partOfSpeech?: string,
+  ) {
+    return this.documentService.getExtractedWords(id, partOfSpeech);
+  }
+
+  @Post(':id/word-quiz/generate')
+  async generateWordQuiz(
+    @Param('id') id: string,
+    @Body('force') force?: boolean,
+  ) {
+    return this.documentService.generateWordQuiz(id, !!force);
+  }
+
+  @Get(':id/word-quiz')
+  async getWordQuiz(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.documentService.getWordQuiz(id, limit ? parseInt(limit) : 40);
+  }
 }
 

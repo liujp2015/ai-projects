@@ -456,6 +456,184 @@ STRICT OUTPUT FORMAT: Output ONLY valid JSON.
             throw new Error(`图片解析失败: ${error.message}`);
         }
     }
+    async extractWordsFromSentences(sentences) {
+        const config = (0, deepseek_config_1.getDeepSeekConfig)();
+        if (!config.apiKey)
+            throw new Error('DeepSeek API Key not configured');
+        const prompt = `
+You are an expert English teacher. Analyze the following English sentences and extract all important words (nouns, verbs, adjectives, and adverbs) with their parts of speech and Chinese translations.
+
+Task:
+1. For each sentence, identify all important words (nouns, verbs, adjectives, adverbs).
+2. For each word, provide:
+   - word: the English word (in lowercase)
+   - partOfSpeech: one of "noun", "verb", "adjective", "adverb"
+   - translation: Chinese translation
+   - sentence: the original sentence containing this word
+
+Rules:
+- Only extract meaningful words (skip articles, prepositions, conjunctions, etc.)
+- If a word appears multiple times in different sentences, include it multiple times
+- Focus on important vocabulary words that are worth learning
+- Return a JSON object with a "words" field containing an array
+
+Sentences:
+${sentences.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+
+Return ONLY a JSON object in this format:
+{
+  "words": [
+    {
+      "word": "example",
+      "partOfSpeech": "noun",
+      "translation": "例子",
+      "sentence": "This is an example sentence."
+    },
+    ...
+  ]
+}
+`;
+        try {
+            const response = await axios_1.default.post(config.baseUrl || 'https://api.deepseek.com/chat/completions', {
+                model: config.model,
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are an expert English teacher. Extract words with parts of speech and translations. Output only valid JSON object with a "words" array.',
+                    },
+                    { role: 'user', content: prompt },
+                ],
+                temperature: 0.2,
+                response_format: { type: 'json_object' },
+            }, {
+                headers: {
+                    Authorization: `Bearer ${config.apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+            const raw = String(response.data?.choices?.[0]?.message?.content ?? '');
+            this.logger.log(`Extract words raw response: ${raw.substring(0, 500)}`);
+            const jsonText = this.extractJsonText(raw);
+            let parsed;
+            try {
+                parsed = JSON.parse(jsonText);
+            }
+            catch (e) {
+                this.logger.error(`Extract words JSON parse failed. Raw content: ${raw}`);
+                throw e;
+            }
+            let words = [];
+            if (Array.isArray(parsed)) {
+                words = parsed;
+            }
+            else if (parsed && typeof parsed === 'object' && 'words' in parsed && Array.isArray(parsed.words)) {
+                words = parsed.words;
+            }
+            else if (parsed && typeof parsed === 'object') {
+                const keys = Object.keys(parsed);
+                for (const key of keys) {
+                    if (Array.isArray(parsed[key])) {
+                        words = parsed[key];
+                        break;
+                    }
+                }
+            }
+            if (!Array.isArray(words)) {
+                this.logger.error(`Extract words: response is not an array. Parsed: ${JSON.stringify(parsed)}`);
+                return [];
+            }
+            if (words.length === 0) {
+                this.logger.warn('No words extracted from sentences');
+                return [];
+            }
+            const normalizedWords = words
+                .filter((w) => w && w.word && w.partOfSpeech && w.sentence)
+                .map((w) => ({
+                word: String(w.word).toLowerCase().trim(),
+                partOfSpeech: String(w.partOfSpeech).toLowerCase().trim(),
+                translation: String(w.translation || '').trim(),
+                sentence: String(w.sentence).trim(),
+            }));
+            this.logger.log(`Extracted ${normalizedWords.length} words from ${sentences.length} sentences`);
+            return normalizedWords;
+        }
+        catch (error) {
+            this.logger.error(`Extract words failed: ${error.message}`);
+            if (error.response) {
+                this.logger.error(`API response status: ${error.response.status}`);
+                this.logger.error(`API response data: ${JSON.stringify(error.response.data)}`);
+            }
+            throw new Error(`词性提取失败: ${error.message}`);
+        }
+    }
+    async generateWordQuizQuestions(words) {
+        const config = (0, deepseek_config_1.getDeepSeekConfig)();
+        if (!config.apiKey)
+            throw new Error('DeepSeek API Key not configured');
+        const prompt = `
+You are an expert English teacher. Based on the provided list of extracted words (with their translations and source sentences), generate vocabulary quiz questions.
+
+Task:
+For each word, generate TWO types of questions:
+1. ZH_TO_EN: Given the Chinese translation and source sentence (as context), choose the correct English word.
+2. EN_TO_ZH: Given the English word and source sentence (as context), choose the correct Chinese translation.
+
+Rules for options:
+- Provide exactly 4 options for each question.
+- Options must be plausible distractors (similar part of speech, similar meaning, or commonly confused words).
+- Ensure the correct answer is included in the options.
+- IMPORTANT: Randomize the order of the options array. The correct answer MUST NOT always be the first item.
+
+Input Words:
+${JSON.stringify(words)}
+
+Return ONLY a JSON object with a "questions" field containing an array of objects:
+{
+  "questions": [
+    {
+      "type": "ZH_TO_EN",
+      "prompt": "中文翻译内容",
+      "answer": "correct_word",
+      "options": ["word1", "word2", "word3", "word4"],
+      "sentenceContext": "Source sentence with the word replaced by ____"
+    },
+    {
+      "type": "EN_TO_ZH",
+      "prompt": "english_word",
+      "answer": "正确翻译",
+      "options": ["翻译1", "翻译2", "翻译3", "翻译4"],
+      "sentenceContext": "Original source sentence"
+    }
+  ]
+}
+`;
+        try {
+            const response = await axios_1.default.post(config.baseUrl || 'https://api.deepseek.com/chat/completions', {
+                model: config.model,
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are an expert English teacher. Generate vocabulary quiz questions in JSON format.',
+                    },
+                    { role: 'user', content: prompt },
+                ],
+                temperature: 0.3,
+                response_format: { type: 'json_object' },
+            }, {
+                headers: {
+                    Authorization: `Bearer ${config.apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+            const content = response.data.choices[0].message.content;
+            const parsed = JSON.parse(this.extractJsonText(content));
+            return parsed.questions || [];
+        }
+        catch (error) {
+            this.logger.error(`Word quiz generation failed: ${error.message}`);
+            throw error;
+        }
+    }
 };
 exports.AIService = AIService;
 exports.AIService = AIService = AIService_1 = __decorate([

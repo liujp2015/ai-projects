@@ -8,6 +8,7 @@ import { UserWordModule } from './user-word/user-word.module';
 import { TTSModule } from './tts/tts.module';
 import { ExerciseModule } from './exercise/exercise.module';
 import { SentenceBuilderModule } from './sentence-builder/sentence-builder.module';
+import { ConversationModule } from './conversation/conversation.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { SentenceBuilderModule } from './sentence-builder/sentence-builder.modul
     TTSModule,
     ExerciseModule,
     SentenceBuilderModule,
+    ConversationModule,
   ],
   controllers: [AppController],
   providers: [AppService],

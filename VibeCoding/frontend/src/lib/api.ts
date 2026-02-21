@@ -360,6 +360,119 @@ export async function fetchDocumentTranslation(id: string): Promise<DocumentTran
   return res.json();
 }
 
+export type ExtractedWord = {
+  id: string;
+  word: string;
+  partOfSpeech: string;
+  translation: string | null;
+  sentence: string;
+  documentId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function extractWordsFromDocument(id: string): Promise<{ extracted: number; message: string }> {
+  const res = await apiFetch(`/api/documents/${id}/extract-words`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`Failed to extract words: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchExtractedWords(id: string, partOfSpeech?: string): Promise<ExtractedWord[]> {
+  const url = new URL(`/api/documents/${id}/extracted-words`, window.location.origin);
+  if (partOfSpeech) {
+    url.searchParams.set('partOfSpeech', partOfSpeech);
+  }
+  const res = await apiFetch(url.pathname + url.search);
+  if (!res.ok) throw new Error(`Failed to fetch extracted words: ${res.status}`);
+  return res.json();
+}
+
+// 句子单词测试题（独立于现有 ExerciseQuestion）
+export type WordQuizQuestion = {
+  id: string;
+  type: 'ZH_TO_EN' | 'EN_TO_ZH';
+  prompt: string;
+  answer: string;
+  options: string[];
+  sentenceContext?: string | null;
+  documentId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function generateWordQuiz(id: string, force: boolean = false): Promise<{ total: number; generated: number }> {
+  const res = await apiFetch(`/api/documents/${id}/word-quiz/generate`, {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  });
+  if (!res.ok) throw new Error(`Failed to generate word quiz: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchWordQuizQuestions(id: string, limit: number = 40): Promise<WordQuizQuestion[]> {
+  const res = await apiFetch(`/api/documents/${id}/word-quiz?limit=${limit}`);
+  if (!res.ok) throw new Error(`Failed to fetch word quiz: ${res.status}`);
+  return res.json();
+}
+
+// 对话相关类型和 API
+export type ConversationMessage = {
+  id: string;
+  speaker: string;
+  content: string;
+  orderIndex: number;
+  imageUrl?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Conversation = {
+  id: string;
+  title: string;
+  description?: string | null;
+  messages: ConversationMessage[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function uploadConversation(files: File[], title?: string): Promise<Conversation> {
+  const formData = new FormData();
+  files.forEach((file) => {
+    formData.append('files', file);
+  });
+  if (title) {
+    formData.append('title', title);
+  }
+
+  const res = await apiFetch('/api/conversations/upload', {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) throw new Error(`Failed to upload conversation: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchConversations(): Promise<Conversation[]> {
+  const res = await apiFetch('/api/conversations');
+  if (!res.ok) throw new Error(`Failed to fetch conversations: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchConversation(id: string): Promise<Conversation> {
+  const res = await apiFetch(`/api/conversations/${id}`);
+  if (!res.ok) throw new Error(`Failed to fetch conversation: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  const res = await apiFetch(`/api/conversations/${id}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`Failed to delete conversation: ${res.status}`);
+}
+
 export async function resetDatabase(): Promise<{ message: string; timestamp: string }> {
   const res = await apiFetch('/api/admin/reset', {
     method: 'POST',

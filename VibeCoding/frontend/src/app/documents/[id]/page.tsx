@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { fetchDocument, fetchDocumentTranslation, fetchQuestionBank, generateQuestionBank, DocumentDetail, DocumentTranslation, ExerciseQuestion, lookupWord, WordDefinition, translateMissingSentences, translateAlignRebuild, upsertUserWord, deleteUserWord, fetchUserWords, UserWord, getTTSUrl, validateSentence, AIValidationResult, appendText, appendImages } from '@/lib/api';
+import { fetchDocument, fetchDocumentTranslation, fetchQuestionBank, generateQuestionBank, DocumentDetail, DocumentTranslation, ExerciseQuestion, lookupWord, WordDefinition, translateMissingSentences, translateAlignRebuild, upsertUserWord, deleteUserWord, fetchUserWords, UserWord, getTTSUrl, validateSentence, AIValidationResult, appendText, appendImages, extractWordsFromDocument, fetchExtractedWords, ExtractedWord, generateWordQuiz, fetchWordQuizQuestions, WordQuizQuestion } from '@/lib/api';
 import Link from 'next/link';
 
 const isWordToken = (token: string) => /^[a-zA-Z0-9'-]+$/.test(token);
@@ -88,6 +88,21 @@ export default function DocumentDetailPage() {
   const [activeBlankIndex, setActiveBlankIndex] = useState<number | null>(null);
   const [testResult, setTestResult] = useState<{ isCorrect: boolean; message: string } | null>(null);
 
+  // 句子单词测试状态（独立于 showTest）
+  const [showWordQuiz, setShowWordQuiz] = useState(false);
+  const [wordQuizQuestions, setWordQuizQuestions] = useState<WordQuizQuestion[]>([]);
+  const [wordQuizIndex, setWordQuizIndex] = useState(0);
+  const [wordQuizSelection, setWordQuizSelection] = useState<string | null>(null);
+  const [wordQuizResult, setWordQuizResult] = useState<{ isCorrect: boolean; message: string } | null>(null);
+  const [generatingWordQuiz, setGeneratingWordQuiz] = useState(false);
+  const [loadingWordQuiz, setLoadingWordQuiz] = useState(false);
+
+  // 词性提取状态
+  const [extractedWords, setExtractedWords] = useState<ExtractedWord[]>([]);
+  const [extractingWords, setExtractingWords] = useState(false);
+  const [wordsLoading, setWordsLoading] = useState(false);
+  const [selectedPartOfSpeech, setSelectedPartOfSpeech] = useState<string>('all'); // 'all', 'noun', 'verb', 'adjective', 'adverb'
+
   // 业务逻辑函数
   const loadTranslation = async () => {
     if (!id) return;
@@ -143,6 +158,54 @@ export default function DocumentDetailPage() {
     } finally {
       setGeneratingQuestions(false);
     }
+  };
+
+  const handleGenerateWordQuiz = async () => {
+    if (!id || generatingWordQuiz) return;
+    const force = confirm('是否要覆盖现有单词测试题并重新生成？');
+    try {
+      setGeneratingWordQuiz(true);
+      const res = await generateWordQuiz(id as string, force);
+      alert(`单词测试题生成完成！共生成 ${res.total} 道题。`);
+    } catch (err) {
+      alert('单词测试题生成失败：' + (err as Error).message);
+    } finally {
+      setGeneratingWordQuiz(false);
+    }
+  };
+
+  const startWordQuiz = async () => {
+    if (!id) return;
+    try {
+      setLoadingWordQuiz(true);
+      const qs = await fetchWordQuizQuestions(id as string, 40);
+      if (!qs.length) {
+        alert('该文档尚未生成单词测试题，请先点击“生成句子单词测试题（DeepSeek）”。');
+        return;
+      }
+      setWordQuizQuestions(qs);
+      setWordQuizIndex(0);
+      setWordQuizSelection(null);
+      setWordQuizResult(null);
+      setShowWordQuiz(true);
+    } catch (err) {
+      alert('无法获取单词测试题，请检查后端连接');
+    } finally {
+      setLoadingWordQuiz(false);
+    }
+  };
+
+  const currentWordQuiz = wordQuizQuestions[wordQuizIndex];
+
+  const checkWordQuizAnswer = () => {
+    if (!currentWordQuiz) return;
+    const sel = wordQuizSelection;
+    if (!sel) return;
+    const isCorrect = sel.trim().toLowerCase() === String(currentWordQuiz.answer).trim().toLowerCase();
+    setWordQuizResult({
+      isCorrect,
+      message: isCorrect ? '回答正确！' : `正确答案：${currentWordQuiz.answer}`,
+    });
   };
 
   const startTest = async () => {
@@ -207,8 +270,44 @@ export default function DocumentDetailPage() {
   };
 
   useEffect(() => {
-    if (viewTab === 'translation') loadTranslation();
+    if (viewTab === 'translation') {
+      loadTranslation();
+      loadExtractedWords();
+    }
   }, [viewTab, id]);
+
+  const loadExtractedWords = async () => {
+    if (!id) return;
+    try {
+      setWordsLoading(true);
+      const words = await fetchExtractedWords(id as string, selectedPartOfSpeech === 'all' ? undefined : selectedPartOfSpeech);
+      setExtractedWords(words);
+    } catch (err) {
+      console.error('Failed to load extracted words', err);
+    } finally {
+      setWordsLoading(false);
+    }
+  };
+
+  const handleExtractWords = async () => {
+    if (!id || extractingWords) return;
+    try {
+      setExtractingWords(true);
+      await extractWordsFromDocument(id as string);
+      await loadExtractedWords();
+      alert('词性提取完成！');
+    } catch (err) {
+      alert('词性提取失败：' + (err as Error).message);
+    } finally {
+      setExtractingWords(false);
+    }
+  };
+
+  useEffect(() => {
+    if (viewTab === 'translation') {
+      loadExtractedWords();
+    }
+  }, [selectedPartOfSpeech, viewTab, id]);
 
   const handleAppendText = async () => {
     if (!id || !appendTextContent.trim() || appending) return;
@@ -607,7 +706,7 @@ export default function DocumentDetailPage() {
           </div>
           ) : (
             <div className="space-y-8">
-              {!showTest ? (
+              {(!showTest && !showWordQuiz) ? (
                 <>
                   <div className="flex items-center justify-between bg-blue-50 p-6 rounded-3xl border border-blue-100">
                     <div>
@@ -625,10 +724,24 @@ export default function DocumentDetailPage() {
                         {generatingQuestions ? '生成中...' : '生成题库（DeepSeek）'}
                       </button>
                       <button
+                        onClick={handleGenerateWordQuiz}
+                        disabled={generatingWordQuiz}
+                        className="px-6 py-2 bg-purple-600 text-white rounded-full text-sm font-bold shadow-md hover:bg-purple-700 transition-all disabled:opacity-50"
+                      >
+                        {generatingWordQuiz ? '生成中...' : '生成句子单词测试题（DeepSeek）'}
+                      </button>
+                      <button
                         onClick={startTest}
                         className="px-6 py-2 bg-black text-white rounded-full text-sm font-bold shadow-md hover:scale-105 transition-all"
                       >
                         开始测试
+                      </button>
+                      <button
+                        onClick={startWordQuiz}
+                        disabled={loadingWordQuiz}
+                        className="px-6 py-2 bg-gray-900 text-white rounded-full text-sm font-bold shadow-md hover:bg-gray-800 transition-all disabled:opacity-50"
+                      >
+                        {loadingWordQuiz ? '加载中...' : '句子单词测试'}
                       </button>
                     </div>
                   </div>
@@ -636,75 +749,255 @@ export default function DocumentDetailPage() {
                   {translationLoading ? (
                     <div className="py-20 text-center text-gray-400 animate-pulse">加载对照中...</div>
                   ) : (
-                    <div className="space-y-6">
-                      {/* 句子对照部分 */}
-                      <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-                        <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
-                          <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                            <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
-                            核心句子对照
-                          </h3>
-                        </div>
-                        <div className="grid grid-cols-2 gap-0 border-b border-gray-100 bg-gray-50/50">
-                          <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">中文句子</div>
-                          <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">English Sentence</div>
-                        </div>
-                        <div className="divide-y divide-gray-100">
-                          {(() => {
-                            const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-                            const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-                            
-                            // 启发式区分句子和单词：包含空格且长度大于 15 的通常是句子
-                            const sentences = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
-                              .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15));
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                      {/* 左侧：中英对照 */}
+                      <div className="lg:col-span-2 space-y-6">
+                        {/* 句子对照部分 */}
+                        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+                          <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
+                            <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                              <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                              核心句子对照
+                            </h3>
+                          </div>
+                          <div className="grid grid-cols-2 gap-0 border-b border-gray-100 bg-gray-50/50">
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">中文句子</div>
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">English Sentence</div>
+                          </div>
+                          <div className="divide-y divide-gray-100">
+                            {(() => {
+                              const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+                              const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+                              
+                              // 启发式区分句子和单词：包含空格且长度大于 15 的通常是句子
+                              const sentences = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
+                                .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15));
 
-                            if (sentences.length === 0) return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到完整句子对照</div>;
+                              if (sentences.length === 0) return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到完整句子对照</div>;
 
-                            return sentences.map((item, idx) => (
-                              <div key={idx} className="grid grid-cols-2 gap-0 hover:bg-gray-50 transition-colors">
-                                <div className="p-4 text-sm text-gray-800 leading-relaxed border-r border-gray-100 whitespace-pre-wrap">{item.zh}</div>
-                                <div className="p-4 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-medium">{item.en}</div>
-                              </div>
-                            ));
-                          })()}
+                              return sentences.map((item, idx) => (
+                                <div key={idx} className="grid grid-cols-2 gap-0 hover:bg-gray-50 transition-colors">
+                                  <div className="p-4 text-sm text-gray-800 leading-relaxed border-r border-gray-100 whitespace-pre-wrap">{item.zh}</div>
+                                  <div className="p-4 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-medium">{item.en}</div>
+                                </div>
+                              ));
+                            })()}
+                          </div>
+                        </div>
+
+                        {/* 单词对照部分 */}
+                        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+                          <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
+                            <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                              词汇对照表
+                            </h3>
+                          </div>
+                          <div className="grid grid-cols-2 gap-0 border-b border-gray-100 bg-gray-50/50">
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">中文单词</div>
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">English Word</div>
+                          </div>
+                          <div className="divide-y divide-gray-100">
+                            {(() => {
+                              const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+                              const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+                              
+                              // 剩下的通常是单词
+                              const words = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
+                                .filter(item => item.en && !(item.en.includes(' ') && item.en.length > 15));
+
+                              if (words.length === 0) return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到单词对照</div>;
+
+                              return words.map((item, idx) => (
+                                <div key={idx} className="grid grid-cols-2 gap-0 hover:bg-gray-50 transition-colors">
+                                  <div className="p-4 text-sm text-gray-800 border-r border-gray-100">{item.zh}</div>
+                                  <div className="p-4 text-sm text-gray-900 font-bold">{item.en}</div>
+                                </div>
+                              ));
+                            })()}
+                          </div>
                         </div>
                       </div>
 
-                      {/* 单词对照部分 */}
-                      <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-                        <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
-                          <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                            <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                            词汇对照表
-                          </h3>
-                        </div>
-                        <div className="grid grid-cols-2 gap-0 border-b border-gray-100 bg-gray-50/50">
-                          <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">中文单词</div>
-                          <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">English Word</div>
-                        </div>
-                        <div className="divide-y divide-gray-100">
-                          {(() => {
-                            const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-                            const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+                      {/* 右侧：词性列表 */}
+                      <div className="lg:col-span-1">
+                        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden sticky top-24">
+                          <div className="p-4 bg-gray-50 border-b border-gray-100">
+                            <div className="flex justify-between items-center mb-4">
+                              <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
+                                句子学习
+                              </h3>
+                              <button
+                                onClick={handleExtractWords}
+                                disabled={extractingWords}
+                                className="px-3 py-1.5 text-xs font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-all disabled:opacity-50"
+                              >
+                                {extractingWords ? '提取中...' : '提取词性'}
+                              </button>
+                            </div>
                             
-                            // 剩下的通常是单词
-                            const words = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
-                              .filter(item => item.en && !(item.en.includes(' ') && item.en.length > 15));
+                            {/* Tab 切换 */}
+                            <div className="flex gap-2 flex-wrap">
+                              {[
+                                { key: 'all', label: '全部' },
+                                { key: 'noun', label: '名词' },
+                                { key: 'verb', label: '动词' },
+                                { key: 'adjective', label: '形容词' },
+                                { key: 'adverb', label: '副词' },
+                              ].map((tab) => (
+                                <button
+                                  key={tab.key}
+                                  onClick={() => setSelectedPartOfSpeech(tab.key)}
+                                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
+                                    selectedPartOfSpeech === tab.key
+                                      ? 'bg-purple-600 text-white'
+                                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                  }`}
+                                >
+                                  {tab.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
 
-                            if (words.length === 0) return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到单词对照</div>;
-
-                            return words.map((item, idx) => (
-                              <div key={idx} className="grid grid-cols-2 gap-0 hover:bg-gray-50 transition-colors">
-                                <div className="p-4 text-sm text-gray-800 border-r border-gray-100">{item.zh}</div>
-                                <div className="p-4 text-sm text-gray-900 font-bold">{item.en}</div>
+                          {/* 词性列表 */}
+                          <div className="max-h-[calc(100vh-300px)] overflow-y-auto">
+                            {wordsLoading ? (
+                              <div className="p-8 text-center text-gray-400 animate-pulse">加载中...</div>
+                            ) : extractedWords.length === 0 ? (
+                              <div className="p-8 text-center text-gray-400 text-sm">
+                                {extractingWords ? '正在提取词性...' : '点击"提取词性"按钮开始学习'}
                               </div>
-                            ));
-                          })()}
+                            ) : (
+                              <div className="divide-y divide-gray-100">
+                                {extractedWords.map((word) => (
+                                  <div
+                                    key={word.id}
+                                    className="p-4 hover:bg-gray-50 transition-colors cursor-pointer"
+                                    onClick={() => handleWordClick(word.word, '')}
+                                  >
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-2 mb-1">
+                                          <span className="text-sm font-bold text-gray-900">{word.word}</span>
+                                          <span className="text-[10px] px-2 py-0.5 bg-purple-100 text-purple-600 rounded-full uppercase">
+                                            {word.partOfSpeech}
+                                          </span>
+                                        </div>
+                                        {word.translation && (
+                                          <p className="text-xs text-gray-600 mb-2">{word.translation}</p>
+                                        )}
+                                        <p className="text-xs text-gray-400 italic line-clamp-2">{word.sentence}</p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
                   )}
                 </>
+              ) : showWordQuiz ? (
+                <div className="bg-white p-10 rounded-3xl border border-gray-100 shadow-xl">
+                  <header className="flex justify-between items-center mb-10">
+                    <button
+                      onClick={() => setShowWordQuiz(false)}
+                      className="text-gray-400 hover:text-gray-600 font-bold text-sm uppercase tracking-widest"
+                    >
+                      退出单词测试
+                    </button>
+                    <span className="text-purple-600 font-bold">
+                      进度: {wordQuizIndex + 1} / {wordQuizQuestions.length}
+                    </span>
+                  </header>
+
+                  <div className="space-y-8">
+                    <div>
+                      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">
+                        {currentWordQuiz?.type === 'ZH_TO_EN' ? '中文提示（选英文单词）' : '英文提示（选中文意思）'}
+                      </h3>
+                      <p className="text-2xl font-medium text-gray-900 leading-relaxed">
+                        {currentWordQuiz?.prompt}
+                      </p>
+                      {currentWordQuiz?.sentenceContext && (
+                        <p className="mt-4 text-sm text-gray-500 italic bg-gray-50 p-4 rounded-2xl border border-gray-100 whitespace-pre-wrap">
+                          {currentWordQuiz.sentenceContext}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {currentWordQuiz?.options?.map((opt: string, i: number) => (
+                        <button
+                          key={i}
+                          disabled={!!wordQuizResult}
+                          onClick={() => setWordQuizSelection(opt)}
+                          className={`p-6 rounded-2xl border-2 text-left transition-all font-bold text-lg ${
+                            wordQuizSelection === opt
+                              ? 'border-purple-500 bg-purple-50 text-purple-700 shadow-md scale-[1.02]'
+                              : 'border-gray-100 hover:border-purple-200 hover:bg-gray-50/50'
+                          }`}
+                        >
+                          <span className={`inline-block w-10 h-10 rounded-full text-center leading-10 mr-4 text-sm font-black ${
+                            wordQuizSelection === opt ? 'bg-purple-500 text-white' : 'bg-gray-100 text-gray-400'
+                          }`}>
+                            {String.fromCharCode(65 + i)}
+                          </span>
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+
+                    {wordQuizResult && (
+                      <div className={`p-6 rounded-2xl ${wordQuizResult.isCorrect ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
+                        <p className="font-bold mb-1">{wordQuizResult.isCorrect ? '回答正确！' : '回答错误'}</p>
+                        <p className="text-sm opacity-80">{wordQuizResult.message}</p>
+                      </div>
+                    )}
+
+                    <div className="pt-6 border-t border-gray-100 flex gap-4">
+                      {!wordQuizResult ? (
+                        <button
+                          onClick={checkWordQuizAnswer}
+                          disabled={!wordQuizSelection}
+                          className="flex-1 py-4 bg-purple-600 text-white rounded-2xl font-bold shadow-lg hover:bg-purple-700 disabled:opacity-50 transition-all"
+                        >
+                          提交判定
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            if (wordQuizIndex < wordQuizQuestions.length - 1) {
+                              setWordQuizIndex(prev => prev + 1);
+                              setWordQuizSelection(null);
+                              setWordQuizResult(null);
+                            } else {
+                              alert('单词测试完成！');
+                              setShowWordQuiz(false);
+                            }
+                          }}
+                          className="flex-1 py-4 bg-black text-white rounded-2xl font-bold shadow-lg hover:bg-gray-800 transition-all"
+                        >
+                          {wordQuizIndex < wordQuizQuestions.length - 1 ? '下一题' : '完成测试'}
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => {
+                          setWordQuizSelection(null);
+                          setWordQuizResult(null);
+                        }}
+                        className="px-8 py-4 border border-gray-200 rounded-2xl font-bold text-gray-500 hover:bg-gray-50"
+                      >
+                        重置
+                      </button>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <div className="bg-white p-10 rounded-3xl border border-gray-100 shadow-xl">
                   <header className="flex justify-between items-center mb-10">

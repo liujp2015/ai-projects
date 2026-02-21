@@ -589,6 +589,153 @@ let DocumentService = DocumentService_1 = class DocumentService {
         });
         return this.shuffleArray(questions).slice(0, limit);
     }
+    async generateWordQuiz(documentId, force = false) {
+        const doc = await this.prisma.document.findUnique({
+            where: { id: documentId },
+            include: { extractedWords: true },
+        });
+        if (!doc)
+            throw new Error('Document not found');
+        let words = doc.extractedWords;
+        if (words.length === 0) {
+            await this.extractWordsFromDocument(documentId);
+            const updated = await this.prisma.document.findUnique({
+                where: { id: documentId },
+                include: { extractedWords: true },
+            });
+            words = updated?.extractedWords ?? [];
+        }
+        if (words.length === 0) {
+            throw new Error('未提取到可用于出题的单词，请先确保核心句子存在且可提取。');
+        }
+        if (force) {
+            await this.prisma.wordQuizQuestion.deleteMany({ where: { documentId } });
+        }
+        else {
+            const existing = await this.prisma.wordQuizQuestion.count({ where: { documentId } });
+            if (existing > 0) {
+                return { total: existing, generated: 0 };
+            }
+        }
+        const usable = words.filter((w) => (w.translation ?? '').trim().length > 0);
+        if (usable.length === 0) {
+            throw new Error('提取到的单词缺少中文翻译，无法生成测试题。请先重新“提取词性”。');
+        }
+        const batchSize = 15;
+        let generated = 0;
+        for (let i = 0; i < usable.length; i += batchSize) {
+            const batch = usable.slice(i, i + batchSize);
+            try {
+                const aiQuestions = await this.aiService.generateWordQuizQuestions(batch.map((w) => ({
+                    word: w.word,
+                    translation: w.translation ?? '',
+                    partOfSpeech: w.partOfSpeech,
+                    sentence: w.sentence,
+                })));
+                if (Array.isArray(aiQuestions) && aiQuestions.length > 0) {
+                    await this.prisma.wordQuizQuestion.createMany({
+                        data: aiQuestions
+                            .filter((q) => q && q.type && q.prompt && q.answer && Array.isArray(q.options))
+                            .map((q) => ({
+                            type: q.type,
+                            prompt: String(q.prompt),
+                            answer: String(q.answer),
+                            options: q.options.map((x) => String(x)),
+                            sentenceContext: q.sentenceContext ? String(q.sentenceContext) : null,
+                            documentId,
+                        })),
+                    });
+                    generated += aiQuestions.length;
+                }
+            }
+            catch (e) {
+                this.logger.error(`Failed to generate word quiz batch: ${e.message}`);
+            }
+        }
+        return { total: generated, generated };
+    }
+    async getWordQuiz(documentId, limit = 40) {
+        const questions = await this.prisma.wordQuizQuestion.findMany({
+            where: { documentId },
+            orderBy: { createdAt: 'desc' },
+        });
+        return this.shuffleArray(questions).slice(0, limit);
+    }
+    async extractWordsFromDocument(documentId) {
+        try {
+            const doc = await this.prisma.document.findUnique({
+                where: { id: documentId },
+            });
+            if (!doc) {
+                throw new Error('Document not found');
+            }
+            const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            const sentences = zhLines
+                .map((zh, i) => ({ zh, en: enLines[i] }))
+                .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15))
+                .map(item => item.en);
+            if (sentences.length === 0) {
+                this.logger.warn(`No core sentences found in document ${documentId} (chineseText/englishText)`);
+                return { extracted: 0, message: 'No core sentences found in document' };
+            }
+            this.logger.log(`Extracting words from ${sentences.length} core sentences in document ${documentId}`);
+            const batchSize = 50;
+            const batches = [];
+            for (let i = 0; i < sentences.length; i += batchSize) {
+                batches.push(sentences.slice(i, i + batchSize));
+            }
+            this.logger.log(`Processing ${batches.length} batches of sentences`);
+            const allExtractedWords = [];
+            for (let i = 0; i < batches.length; i++) {
+                try {
+                    this.logger.log(`Processing batch ${i + 1}/${batches.length} (${batches[i].length} sentences)`);
+                    const batchWords = await this.aiService.extractWordsFromSentences(batches[i]);
+                    allExtractedWords.push(...batchWords);
+                }
+                catch (error) {
+                    this.logger.error(`Failed to process batch ${i + 1}: ${error.message}`);
+                }
+            }
+            const extractedWords = allExtractedWords;
+            this.logger.log(`AI extracted ${extractedWords.length} words, saving to database...`);
+            await this.prisma.extractedWord.deleteMany({
+                where: { documentId },
+            });
+            if (extractedWords.length > 0) {
+                await this.prisma.extractedWord.createMany({
+                    data: extractedWords.map(w => ({
+                        word: w.word,
+                        partOfSpeech: w.partOfSpeech,
+                        translation: w.translation || null,
+                        sentence: w.sentence,
+                        documentId,
+                    })),
+                });
+                this.logger.log(`Successfully saved ${extractedWords.length} words to database`);
+            }
+            return {
+                extracted: extractedWords.length,
+                message: `Successfully extracted ${extractedWords.length} words`,
+            };
+        }
+        catch (error) {
+            this.logger.error(`Failed to extract words from document ${documentId}: ${error.message}`);
+            this.logger.error(error.stack);
+            throw error;
+        }
+    }
+    async getExtractedWords(documentId, partOfSpeech) {
+        const where = { documentId };
+        if (partOfSpeech) {
+            where.partOfSpeech = partOfSpeech;
+        }
+        const words = await this.prisma.extractedWord.findMany({
+            where,
+            orderBy: { word: 'asc' },
+        });
+        return words;
+    }
 };
 exports.DocumentService = DocumentService;
 exports.DocumentService = DocumentService = DocumentService_1 = __decorate([

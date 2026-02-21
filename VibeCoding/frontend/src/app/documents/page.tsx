@@ -122,6 +122,12 @@ export default function DocumentsPage() {
                 测试声音
               </button>
               <Link 
+                href="/conversations" 
+                className="px-3 py-1 text-sm font-medium text-blue-600 border border-blue-600 rounded-md hover:bg-blue-50 transition-colors"
+              >
+                对话
+              </Link>
+              <Link 
                 href="/user-words" 
                 className="px-3 py-1 text-sm font-medium text-blue-600 border border-blue-600 rounded-md hover:bg-blue-50 transition-colors"
               >

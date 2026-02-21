@@ -57,6 +57,23 @@ let DocumentController = class DocumentController {
     async getQuestions(id, limit) {
         return this.documentService.getQuestions(id, limit ? parseInt(limit) : 20);
     }
+    async extractWords(id) {
+        try {
+            return await this.documentService.extractWordsFromDocument(id);
+        }
+        catch (error) {
+            throw new Error(`词性提取失败: ${error.message}`);
+        }
+    }
+    async getExtractedWords(id, partOfSpeech) {
+        return this.documentService.getExtractedWords(id, partOfSpeech);
+    }
+    async generateWordQuiz(id, force) {
+        return this.documentService.generateWordQuiz(id, !!force);
+    }
+    async getWordQuiz(id, limit) {
+        return this.documentService.getWordQuiz(id, limit ? parseInt(limit) : 40);
+    }
 };
 exports.DocumentController = DocumentController;
 __decorate([
@@ -152,6 +169,37 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], DocumentController.prototype, "getQuestions", null);
+__decorate([
+    (0, common_1.Post)(':id/extract-words'),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "extractWords", null);
+__decorate([
+    (0, common_1.Get)(':id/extracted-words'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Query)('partOfSpeech')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "getExtractedWords", null);
+__decorate([
+    (0, common_1.Post)(':id/word-quiz/generate'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)('force')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Boolean]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "generateWordQuiz", null);
+__decorate([
+    (0, common_1.Get)(':id/word-quiz'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Query)('limit')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "getWordQuiz", null);
 exports.DocumentController = DocumentController = __decorate([
     (0, common_1.Controller)('documents'),
     __metadata("design:paramtypes", [document_service_1.DocumentService])

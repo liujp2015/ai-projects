@@ -477,8 +477,9 @@ export class OCRService {
           const zh = z[i] || '';
           const en = e[i] || '';
 
-          if (this.containsLatin(zh)) {
-            throw new Error(`第 ${i + 1} 行 zhLines 含英文：${zh}`);
+          // 允许中文翻译中包含少量英文（如专有名词），但不允许全是英文或包含音标
+          if (/^[A-Za-z0-9\s.,!?'"-]+$/.test(zh)) {
+            throw new Error(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
           }
           if (this.containsIpaLike(zh)) {
             throw new Error(`第 ${i + 1} 行 zhLines 含音标/IPA：${zh}`);

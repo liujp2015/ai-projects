@@ -654,7 +654,7 @@ let DocumentService = DocumentService_1 = class DocumentService {
         }
         return { total: generated, generated };
     }
-    async getWordQuiz(documentId, limit = 40) {
+    async getWordQuiz(documentId, limit = 9999) {
         const questions = await this.prisma.wordQuizQuestion.findMany({
             where: { documentId },
             orderBy: { createdAt: 'desc' },

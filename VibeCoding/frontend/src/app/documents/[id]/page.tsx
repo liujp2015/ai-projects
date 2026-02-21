@@ -178,7 +178,7 @@ export default function DocumentDetailPage() {
     if (!id) return;
     try {
       setLoadingWordQuiz(true);
-      const qs = await fetchWordQuizQuestions(id as string, 40);
+      const qs = await fetchWordQuizQuestions(id as string);
       if (!qs.length) {
         alert('该文档尚未生成单词测试题，请先点击“生成句子单词测试题（DeepSeek）”。');
         return;

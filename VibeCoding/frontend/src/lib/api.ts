@@ -411,7 +411,7 @@ export async function generateWordQuiz(id: string, force: boolean = false): Prom
   return res.json();
 }
 
-export async function fetchWordQuizQuestions(id: string, limit: number = 40): Promise<WordQuizQuestion[]> {
+export async function fetchWordQuizQuestions(id: string, limit: number = 9999): Promise<WordQuizQuestion[]> {
   const res = await apiFetch(`/api/documents/${id}/word-quiz?limit=${limit}`);
   if (!res.ok) throw new Error(`Failed to fetch word quiz: ${res.status}`);
   return res.json();

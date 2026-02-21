@@ -796,7 +796,7 @@ export class DocumentService {
     return { total: generated, generated };
   }
 
-  async getWordQuiz(documentId: string, limit: number = 40) {
+  async getWordQuiz(documentId: string, limit: number = 9999) {
     const questions = await this.prisma.wordQuizQuestion.findMany({
       where: { documentId },
       orderBy: { createdAt: 'desc' },

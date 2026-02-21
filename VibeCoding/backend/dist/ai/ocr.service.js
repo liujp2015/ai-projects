@@ -650,8 +650,8 @@ ${newEnglishLines.map((line, i) => `[${i + 1}] ${line}`).join('\n')}
                 for (let i = 0; i < z.length; i++) {
                     const zh = z[i] || '';
                     const en = e[i] || '';
-                    if (this.containsLatin(zh)) {
-                        throw new Error(`第 ${i + 1} 行 zhLines 含英文：${zh}`);
+                    if (/^[A-Za-z0-9\s.,!?"'\-()\[\]{}:;\/\\]+$/.test(zh)) {
+                        throw new Error(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
                     }
                     if (this.containsIpaLike(zh)) {
                         throw new Error(`第 ${i + 1} 行 zhLines 含音标/IPA：${zh}`);

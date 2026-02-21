@@ -107,37 +107,37 @@ export default function DocumentsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
+    <div className="min-h-screen bg-gray-50 p-4 md:p-8">
       <div className="max-w-4xl mx-auto">
-        <header className="flex justify-between items-center mb-8">
-          <div className="flex items-center gap-4">
-            <h1 className="text-3xl font-bold text-gray-900">My Library</h1>
-            <div className="flex gap-2 ml-4">
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full">
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-900 whitespace-nowrap">My Library</h1>
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
               <button
                 onClick={testAudio}
-                className="px-3 py-1 text-sm font-medium text-gray-600 border border-gray-300 rounded-md hover:bg-gray-100 transition-colors flex items-center gap-1"
+                className="px-3 py-1 text-xs font-medium text-gray-600 border border-gray-300 rounded-md hover:bg-gray-100 transition-colors flex items-center gap-1"
                 title="测试浏览器声音播放"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
                 测试声音
               </button>
               <Link 
                 href="/conversations" 
-                className="px-3 py-1 text-sm font-medium text-blue-600 border border-blue-600 rounded-md hover:bg-blue-50 transition-colors"
+                className="px-3 py-1 text-xs font-medium text-blue-600 border border-blue-600 rounded-md hover:bg-blue-50 transition-colors"
               >
                 对话
               </Link>
               <Link 
                 href="/user-words" 
-                className="px-3 py-1 text-sm font-medium text-blue-600 border border-blue-600 rounded-md hover:bg-blue-50 transition-colors"
+                className="px-3 py-1 text-xs font-medium text-blue-600 border border-blue-600 rounded-md hover:bg-blue-50 transition-colors"
               >
                 生词本
               </Link>
               <Link 
                 href="/review" 
-                className="px-3 py-1 text-sm font-medium text-white bg-blue-600 border border-blue-600 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-2"
+                className="px-3 py-1 text-xs font-medium text-white bg-blue-600 border border-blue-600 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-2"
               >
-                今日复习
+                复习
                 {reviewCount > 0 && (
                   <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
                     {reviewCount}
@@ -146,14 +146,14 @@ export default function DocumentsPage() {
               </Link>
             </div>
           </div>
-          <div className="flex gap-4">
+          <div className="flex gap-2 w-full md:w-auto">
             <button
               onClick={() => setShowManualInput(!showManualInput)}
-              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none"
+              className="flex-1 md:flex-none inline-flex justify-center items-center px-3 py-2 border border-gray-300 text-xs font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none"
             >
-              {showManualInput ? 'Cancel' : 'Paste Text'}
+              {showManualInput ? 'Cancel' : 'Paste'}
             </button>
-            <div className="relative">
+            <div className="flex-1 md:flex-none relative">
               <input
                 type="file"
                 id="images-upload"
@@ -165,14 +165,14 @@ export default function DocumentsPage() {
               />
               <label
                 htmlFor="images-upload"
-                className={`inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 cursor-pointer ${
+                className={`inline-flex w-full justify-center items-center px-3 py-2 border border-gray-300 text-xs font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 cursor-pointer ${
                   uploading ? 'opacity-50 cursor-not-allowed' : ''
                 }`}
               >
-                {uploading ? 'Processing...' : 'Upload Images'}
+                {uploading ? '...' : 'Images'}
               </label>
             </div>
-            <div className="relative">
+            <div className="flex-1 md:flex-none relative">
               <input
                 type="file"
                 id="file-upload"
@@ -183,11 +183,11 @@ export default function DocumentsPage() {
               />
               <label
                 htmlFor="file-upload"
-                className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 cursor-pointer ${
+                className={`inline-flex w-full justify-center items-center px-3 py-2 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 cursor-pointer ${
                   uploading ? 'opacity-50 cursor-not-allowed' : ''
                 }`}
               >
-                {uploading ? 'Uploading...' : 'Upload File'}
+                {uploading ? '...' : 'File'}
               </label>
             </div>
           </div>

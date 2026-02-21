@@ -546,32 +546,32 @@ export default function DocumentDetailPage() {
     <div className="min-h-screen bg-white flex flex-col md:flex-row">
       {/* Main Content */}
       <div className="flex-1 overflow-auto border-r border-gray-100">
-        <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link href="/documents" className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+        <header className="sticky top-0 z-20 bg-white/80 backdrop-blur border-b border-gray-200 px-4 md:px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3 md:gap-4 overflow-hidden">
+            <Link href="/documents" className="p-2 hover:bg-gray-100 rounded-full transition-colors flex-shrink-0">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
             </Link>
-            <div className="flex flex-col">
-            <h1 className="text-lg font-medium text-gray-900 truncate max-w-[200px] sm:max-w-md">
-              {doc.title}
-            </h1>
+            <div className="flex flex-col overflow-hidden">
+              <h1 className="text-base md:text-lg font-medium text-gray-900 truncate">
+                {doc.title}
+              </h1>
               <div className="flex gap-4 mt-1">
                 <button 
                   onClick={() => setViewTab('read')}
-                  className={`text-xs font-bold uppercase tracking-wider transition-colors ${viewTab === 'read' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+                  className={`text-[10px] md:text-xs font-bold uppercase tracking-wider transition-colors ${viewTab === 'read' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
                 >
-                  阅读文章
+                  阅读
                 </button>
                 <button 
                   onClick={() => setViewTab('translation')}
-                  className={`text-xs font-bold uppercase tracking-wider transition-colors ${viewTab === 'translation' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+                  className={`text-[10px] md:text-xs font-bold uppercase tracking-wider transition-colors ${viewTab === 'translation' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
                 >
-                  中英对照
+                  对照
                 </button>
               </div>
             </div>
           </div>
-          <div className="text-xs font-mono text-gray-400 px-3 py-1 bg-gray-50 rounded-full">
+          <div className="text-[10px] font-mono text-gray-400 px-2 py-0.5 bg-gray-50 rounded-full flex-shrink-0">
             {doc.mimeType.split('/')[1].toUpperCase()}
           </div>
         </header>

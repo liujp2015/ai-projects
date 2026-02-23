@@ -9,44 +9,63 @@ datasource db {
 }
 
 model Document {
-  id                   String               @id @default(uuid())
+  id                   String                @id @default(uuid())
   title                String
   filename             String
   fileSize             Int
   mimeType             String
-  originalText         String?              @db.Text  // 千问 OCR 返回的原文
-  chineseText          String?              @db.Text  // 纯中文的句子和单词
-  englishText          String?              @db.Text  // 纯英文的句子和单词
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
+  originalText         String?               @db.Text // 千问 OCR 返回的原文
+  chineseText          String?               @db.Text // 纯中文的句子和单词
+  englishText          String?               @db.Text // 纯英文的句子和单词
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
   paragraphs           Paragraph[]
   exerciseQuestions    ExerciseQuestion[]
   alignedSentencePairs AlignedSentencePair[]
+  alignedWordPairs     AlignedWordPair[]
   extractedWords       ExtractedWord[]
   wordQuizQuestions    WordQuizQuestion[]
+  reviewCards          ReviewCard[]
 }
 
 model AlignedSentencePair {
-  id         String   @id @default(uuid())
+  id         String @id @default(uuid())
   orderIndex Int
-  en         String   @db.Text
-  zh         String   @db.Text
+  en         String @db.Text
+  zh         String @db.Text
 
   documentId String
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([documentId])
+  @@index([documentId, orderIndex])
+}
+
+model AlignedWordPair {
+  id         String  @id @default(uuid())
+  orderIndex Int
+  en         String  @db.Text
+  zh         String  @db.Text
+  lemma      String? @db.Text
+
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([documentId])
   @@index([documentId, orderIndex])
 }
 
 model Paragraph {
-  id         String    @id @default(uuid())
-  content    String    @db.Text
+  id         String     @id @default(uuid())
+  content    String     @db.Text
   orderIndex Int
-  document   Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document   Document   @relation(fields: [documentId], references: [id], onDelete: Cascade)
   documentId String
   sentences  Sentence[]
 
@@ -54,37 +73,37 @@ model Paragraph {
 }
 
 model Sentence {
-  id               String    @id @default(uuid())
-  content          String    @db.Text
-  translationZh    String?   @db.Text
-  orderIndex       Int
-  paragraph        Paragraph @relation(fields: [paragraphId], references: [id], onDelete: Cascade)
-  paragraphId      String
-  userWords        UserWord[]
+  id                String             @id @default(uuid())
+  content           String             @db.Text
+  translationZh     String?            @db.Text
+  orderIndex        Int
+  paragraph         Paragraph          @relation(fields: [paragraphId], references: [id], onDelete: Cascade)
+  paragraphId       String
+  userWords         UserWord[]
   exerciseQuestions ExerciseQuestion[]
 
   @@index([paragraphId])
 }
 
 model UserWord {
-  id               String    @id @default(uuid())
+  id               String          @id @default(uuid())
   word             String
   translation      String?
-  definition       String?   @db.Text
-  status           String    @default("NEW")
-  category         String?   // 单词分类：动词、名词、形容词等
+  definition       String?         @db.Text
+  status           String          @default("NEW")
+  category         String? // 单词分类：动词、名词、形容词等
   sourceSentenceId String?
-  sourceSentence   Sentence? @relation(fields: [sourceSentenceId], references: [id], onDelete: SetNull)
+  sourceSentence   Sentence?       @relation(fields: [sourceSentenceId], references: [id], onDelete: SetNull)
   savedSentences   SavedSentence[]
-  
+
   // SRS 算法字段
-  interval         Int      @default(0)
-  difficulty       Float    @default(2.5)
-  reps             Int      @default(0)
-  
-  nextReviewAt     DateTime @default(now())
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  interval   Int   @default(0)
+  difficulty Float @default(2.5)
+  reps       Int   @default(0)
+
+  nextReviewAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@unique([word])
   @@index([category])
@@ -97,7 +116,7 @@ model DictionaryEntry {
   phonetic     String?
   translation  String?  @db.Text
   definitionZh String?  @db.Text
-  data         Json     // 存储完整的结构化 JSON 数据（包括 phonetics, meanings 等）
+  data         Json // 存储完整的结构化 JSON 数据（包括 phonetics, meanings 等）
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -121,14 +140,14 @@ model WordQuizQuestion {
   type            WordQuizType
   prompt          String       @db.Text // 题目提示（中文或英文）
   answer          String       @db.Text // 正确答案
-  options         String[]     // 选项列表
+  options         String[] // 选项列表
   sentenceContext String?      @db.Text // 来源句子上下文（可选）
-  
-  documentId      String
-  document        Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([documentId])
 }
@@ -140,15 +159,15 @@ enum SavedSentenceSource {
 }
 
 model SavedSentence {
-  id        String             @id @default(uuid())
+  id        String              @id @default(uuid())
   word      String
   scene     String
-  sentence  String             @db.Text
+  sentence  String              @db.Text
   source    SavedSentenceSource @default(USER)
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
 
-  userWord  UserWord           @relation(fields: [word], references: [word], onDelete: Cascade)
+  userWord UserWord @relation(fields: [word], references: [word], onDelete: Cascade)
 
   @@unique([word, scene, sentence])
   @@index([word])
@@ -160,20 +179,20 @@ model ExerciseQuestion {
   type            QuestionType
   promptZh        String       @db.Text
   answerEn        String       @db.Text
-  scrambledTokens String[]     
-  blankedEn       String?      @db.Text 
-  options         String[]     
-  
-  // 新增：用于存储复杂的题目结构（干扰项、空格信息等）
-  structuredData  Json?        
-  
-  documentId      String
-  document        Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  sentenceId      String
-  sentence        Sentence     @relation(fields: [sentenceId], references: [id], onDelete: Cascade)
+  scrambledTokens String[]
+  blankedEn       String?      @db.Text
+  options         String[]
 
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  // 新增：用于存储复杂的题目结构（干扰项、空格信息等）
+  structuredData Json?
+
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sentenceId String
+  sentence   Sentence @relation(fields: [sentenceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([documentId])
   @@index([sentenceId])
@@ -181,30 +200,65 @@ model ExerciseQuestion {
 
 // 从句子中提取的词性（名词、动词、形容词等）
 model ExtractedWord {
-  id         String   @id @default(uuid())
-  word       String   // 单词
+  id           String   @id @default(uuid())
+  word         String // 单词
+  lemma        String? // 单词原形
   partOfSpeech String // 词性：noun, verb, adjective, adverb 等
-  translation String? // 中文翻译
-  sentence   String   @db.Text // 来源句子
-  documentId String
-  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  translation  String? // 中文翻译
+  sentence     String   @db.Text // 来源句子
+  documentId   String
+  document     Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([documentId])
   @@index([documentId, partOfSpeech])
   @@index([partOfSpeech])
 }
 
+enum ReviewCardStatus {
+  LEARNING
+  MASTERED
+}
+
+// 独立的“刷词复习”卡片表：用于从 ExtractedWord 导入后按固定间隔进行复习
+model ReviewCard {
+  id String @id @default(uuid())
+
+  // 来源（按文档独立）
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  // 词条信息
+  word         String
+  partOfSpeech String
+  translation  String?
+  sentence     String? @db.Text
+
+  // 复习状态（固定阶段序列）
+  stage        Int              @default(0)
+  lastReviewAt DateTime?
+  nextReviewAt DateTime         @default(now())
+  status       ReviewCardStatus @default(LEARNING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([documentId, word, partOfSpeech])
+  @@index([documentId])
+  @@index([documentId, nextReviewAt])
+  @@index([status])
+}
+
 // 对话模型
 model Conversation {
-  id          String              @id @default(uuid())
-  title       String              // 对话标题
-  description String?             @db.Text // 对话描述
+  id          String                @id @default(uuid())
+  title       String // 对话标题
+  description String?               @db.Text // 对话描述
   messages    ConversationMessage[]
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
 
   @@index([createdAt])
 }
@@ -214,14 +268,14 @@ model ConversationMessage {
   id             String       @id @default(uuid())
   conversationId String
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  
-  speaker        String       // 说话者：A, B, Person1, Person2 等
-  content        String       @db.Text // 对话内容
-  orderIndex     Int          // 消息顺序
-  imageUrl       String?      // 原始图片 URL（如果有）
-  
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+
+  speaker    String // 说话者：A, B, Person1, Person2 等
+  content    String  @db.Text // 对话内容
+  orderIndex Int // 消息顺序
+  imageUrl   String? // 原始图片 URL（如果有）
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([conversationId])
   @@index([conversationId, orderIndex])

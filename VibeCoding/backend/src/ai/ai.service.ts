@@ -529,7 +529,7 @@ STRICT OUTPUT FORMAT: Output ONLY valid JSON.
    * @param sentences 句子数组
    * @returns 提取的词性数组，格式：{ word: string, partOfSpeech: string, translation: string, sentence: string }[]
    */
-  async extractWordsFromSentences(sentences: string[]): Promise<Array<{ word: string; partOfSpeech: string; translation: string; sentence: string }>> {
+  async extractWordsFromSentences(sentences: string[]): Promise<Array<{ word: string; lemma: string | null; partOfSpeech: string; translation: string; sentence: string }>> {
     const config = getDeepSeekConfig();
     if (!config.apiKey) throw new Error('DeepSeek API Key not configured');
 
@@ -540,6 +540,7 @@ Task:
 1. For each sentence, identify all important words (nouns, verbs, adjectives, adverbs).
 2. For each word, provide:
    - word: the English word (in lowercase)
+   - lemma: the base form/dictionary form of the word (in lowercase, no part of speech)
    - partOfSpeech: one of "noun", "verb", "adjective", "adverb"
    - translation: Chinese translation
    - sentence: the original sentence containing this word
@@ -558,6 +559,7 @@ Return ONLY a JSON object in this format:
   "words": [
     {
       "word": "example",
+      "lemma": "example",
       "partOfSpeech": "noun",
       "translation": "例子",
       "sentence": "This is an example sentence."
@@ -635,6 +637,7 @@ Return ONLY a JSON object in this format:
         .filter((w) => w && w.word && w.partOfSpeech && w.sentence)
         .map((w) => ({
           word: String(w.word).toLowerCase().trim(),
+          lemma: w.lemma ? String(w.lemma).toLowerCase().trim() : null,
           partOfSpeech: String(w.partOfSpeech).toLowerCase().trim(),
           translation: String(w.translation || '').trim(),
           sentence: String(w.sentence).trim(),
@@ -725,6 +728,66 @@ Return ONLY a JSON object with a "questions" field containing an array of object
       return parsed.questions || [];
     } catch (error: any) {
       this.logger.error(`Word quiz generation failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * 批量获取单词原形
+   */
+  async getLemmasForWords(words: string[]): Promise<Record<string, string>> {
+    if (words.length === 0) return {};
+    
+    const config = getDeepSeekConfig();
+    if (!config.apiKey) throw new Error('DeepSeek API Key not configured');
+
+    const prompt = `
+You are a linguistic expert. For the following list of English words, provide their base form (lemma/dictionary form).
+
+Rules:
+- All output should be in lowercase.
+- If a word is already in its base form, the lemma is the word itself.
+- Return ONLY a JSON object where keys are the input words and values are their respective lemmas.
+
+Words:
+${words.join(', ')}
+
+Example Output:
+{
+  "running": "run",
+  "better": "good",
+  "apples": "apple",
+  "studies": "study"
+}
+`;
+
+    try {
+      const response = await axios.post(
+        config.baseUrl || 'https://api.deepseek.com/chat/completions',
+        {
+          model: config.model,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a professional linguistic expert. Output only valid JSON mapping words to their lemmas.',
+            },
+            { role: 'user', content: prompt },
+          ],
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${config.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+
+      const content = response.data.choices[0].message.content;
+      return JSON.parse(this.extractJsonText(content));
+    } catch (error: any) {
+      this.logger.error(`Failed to get lemmas: ${error.message}`);
       throw error;
     }
   }

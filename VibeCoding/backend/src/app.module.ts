@@ -9,6 +9,7 @@ import { TTSModule } from './tts/tts.module';
 import { ExerciseModule } from './exercise/exercise.module';
 import { SentenceBuilderModule } from './sentence-builder/sentence-builder.module';
 import { ConversationModule } from './conversation/conversation.module';
+import { ReviewModule } from './review/review.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ConversationModule } from './conversation/conversation.module';
     ExerciseModule,
     SentenceBuilderModule,
     ConversationModule,
+    ReviewModule,
   ],
   controllers: [AppController],
   providers: [AppService],

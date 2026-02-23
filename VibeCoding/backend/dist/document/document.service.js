@@ -103,6 +103,7 @@ let DocumentService = DocumentService_1 = class DocumentService {
         const originalTexts = [];
         const chineseTexts = [];
         const englishTexts = [];
+        const allWordPairs = [];
         for (const file of files) {
             const mimeType = file.mimetype;
             if (!mimeType.startsWith('image/')) {
@@ -112,16 +113,19 @@ let DocumentService = DocumentService_1 = class DocumentService {
             originalTexts.push(ocrResult.originalText);
             chineseTexts.push(ocrResult.chineseText);
             englishTexts.push(ocrResult.englishText);
+            if (ocrResult.wordPairs) {
+                allWordPairs.push(...ocrResult.wordPairs);
+            }
         }
         const mergedOriginal = originalTexts.join('\n\n');
         const mergedChinese = chineseTexts.filter((t) => t.trim()).join('\n');
         const mergedEnglish = englishTexts.filter((t) => t.trim()).join('\n');
-        return this.saveStructuredContentWithOCR(mergedOriginal, mergedChinese, mergedEnglish, title, `${title}.images`, files.reduce((sum, f) => sum + f.size, 0), 'image/*');
+        return this.saveStructuredContentWithOCR(mergedOriginal, mergedChinese, mergedEnglish, title, `${title}.images`, files.reduce((sum, f) => sum + f.size, 0), 'image/*', allWordPairs);
     }
     async saveRawText(content, title) {
         return this.saveStructuredContent(content, title, 'manual-input.txt', Buffer.byteLength(content), 'text/plain');
     }
-    async saveStructuredContentWithOCR(originalText, chineseText, englishText, title, filename, fileSize, mimeType) {
+    async saveStructuredContentWithOCR(originalText, chineseText, englishText, title, filename, fileSize, mimeType, wordPairs = []) {
         const document = await this.prisma.document.create({
             data: {
                 title: title,
@@ -133,6 +137,17 @@ let DocumentService = DocumentService_1 = class DocumentService {
                 englishText: englishText,
             },
         });
+        if (wordPairs.length > 0) {
+            await this.prisma.alignedWordPair.createMany({
+                data: wordPairs.map((p, i) => ({
+                    en: p.en,
+                    zh: p.zh,
+                    lemma: p.lemma || null,
+                    orderIndex: i,
+                    documentId: document.id,
+                })),
+            });
+        }
         return this.saveStructuredContent(originalText, title, filename, fileSize, mimeType, document.id);
     }
     async saveStructuredContent(text, title, filename, fileSize, mimeType, existingDocumentId) {
@@ -192,6 +207,9 @@ let DocumentService = DocumentService_1 = class DocumentService {
                         sentences: { orderBy: { orderIndex: 'asc' } },
                     },
                 },
+                alignedWordPairs: {
+                    orderBy: { orderIndex: 'asc' },
+                },
             },
         });
     }
@@ -227,13 +245,27 @@ let DocumentService = DocumentService_1 = class DocumentService {
             englishText: newEnLines.join('\n'),
         };
         const mergedResult = await this.ocrService.mergeAndStructureContent(doc.originalText || '', doc.chineseText || '', doc.englishText || '', [newOCRResult]);
-        await this.prisma.document.update({
-            where: { id: documentId },
-            data: {
-                originalText: mergedResult.originalText,
-                chineseText: mergedResult.chineseText,
-                englishText: mergedResult.englishText,
-            },
+        await this.prisma.$transaction(async (tx) => {
+            await tx.document.update({
+                where: { id: documentId },
+                data: {
+                    originalText: mergedResult.originalText,
+                    chineseText: mergedResult.chineseText,
+                    englishText: mergedResult.englishText,
+                },
+            });
+            if (mergedResult.wordPairs && mergedResult.wordPairs.length > 0) {
+                await tx.alignedWordPair.deleteMany({ where: { documentId } });
+                await tx.alignedWordPair.createMany({
+                    data: mergedResult.wordPairs.map((p, i) => ({
+                        en: p.en,
+                        zh: p.zh,
+                        lemma: p.lemma || null,
+                        orderIndex: i,
+                        documentId,
+                    })),
+                });
+            }
         });
         this.logger.log(`Successfully appended text to document ${documentId}. Content merged and structured.`);
         this.logger.log(`Updated originalText length: ${mergedResult.originalText.length}`);
@@ -252,13 +284,27 @@ let DocumentService = DocumentService_1 = class DocumentService {
             newImagesOCRResults.push(ocrResult);
         }
         const mergedResult = await this.ocrService.mergeAndStructureContent(doc.originalText || '', doc.chineseText || '', doc.englishText || '', newImagesOCRResults);
-        await this.prisma.document.update({
-            where: { id: documentId },
-            data: {
-                originalText: mergedResult.originalText,
-                chineseText: mergedResult.chineseText,
-                englishText: mergedResult.englishText,
-            },
+        await this.prisma.$transaction(async (tx) => {
+            await tx.document.update({
+                where: { id: documentId },
+                data: {
+                    originalText: mergedResult.originalText,
+                    chineseText: mergedResult.chineseText,
+                    englishText: mergedResult.englishText,
+                },
+            });
+            if (mergedResult.wordPairs && mergedResult.wordPairs.length > 0) {
+                await tx.alignedWordPair.deleteMany({ where: { documentId } });
+                await tx.alignedWordPair.createMany({
+                    data: mergedResult.wordPairs.map((p, i) => ({
+                        en: p.en,
+                        zh: p.zh,
+                        lemma: p.lemma || null,
+                        orderIndex: i,
+                        documentId,
+                    })),
+                });
+            }
         });
         this.logger.log(`Successfully appended ${files.length} image(s) to document ${documentId}. Content merged and structured.`);
         this.logger.log(`Updated originalText length: ${mergedResult.originalText.length}`);
@@ -716,6 +762,7 @@ let DocumentService = DocumentService_1 = class DocumentService {
                 await this.prisma.extractedWord.createMany({
                     data: extractedWords.map(w => ({
                         word: w.word,
+                        lemma: w.lemma || null,
                         partOfSpeech: w.partOfSpeech,
                         translation: w.translation || null,
                         sentence: w.sentence,
@@ -745,6 +792,127 @@ let DocumentService = DocumentService_1 = class DocumentService {
             orderBy: { word: 'asc' },
         });
         return words;
+    }
+    async exportLemmas(documentId) {
+        const [aligned, extracted] = await Promise.all([
+            this.prisma.alignedWordPair.findMany({
+                where: { documentId },
+                select: { lemma: true },
+            }),
+            this.prisma.extractedWord.findMany({
+                where: { documentId },
+                select: { lemma: true },
+            }),
+        ]);
+        const lemmas = [...aligned, ...extracted]
+            .map((x) => (x.lemma ?? '').trim().toLowerCase())
+            .filter(Boolean)
+            .map((l) => l.replace(/\s+/g, '#'));
+        const seen = new Set();
+        const uniq = [];
+        for (const w of lemmas) {
+            if (seen.has(w))
+                continue;
+            seen.add(w);
+            uniq.push(w);
+        }
+        return uniq.join(' ');
+    }
+    async backfillLemmas(documentId) {
+        const doc = await this.prisma.document.findUnique({
+            where: { id: documentId },
+            include: { alignedWordPairs: true }
+        });
+        if (!doc)
+            throw new Error('Document not found');
+        this.logger.log(`Starting backfill for document: ${documentId}. Current alignedWordPairs count: ${doc.alignedWordPairs.length}`);
+        if (doc.alignedWordPairs.length === 0 && doc.chineseText && doc.englishText) {
+            this.logger.log(`Initializing alignedWordPairs from text for document ${documentId}`);
+            const zhLines = doc.chineseText.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            const enLines = doc.englishText.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            const words = [];
+            const maxLines = Math.min(zhLines.length, enLines.length);
+            for (let i = 0; i < maxLines; i++) {
+                const zh = zhLines[i];
+                const en = enLines[i];
+                if (en && !(en.includes(' ') && en.length > 15)) {
+                    words.push({ zh, en });
+                }
+            }
+            if (words.length > 0) {
+                await this.prisma.alignedWordPair.createMany({
+                    data: words.map((p, i) => ({
+                        en: p.en.trim(),
+                        zh: p.zh.trim(),
+                        orderIndex: i,
+                        documentId,
+                    })),
+                });
+                this.logger.log(`Initialized ${words.length} alignedWordPairs for document ${documentId}.`);
+            }
+        }
+        const [alignedEmpty, extractedEmpty] = await Promise.all([
+            this.prisma.alignedWordPair.findMany({
+                where: { documentId, OR: [{ lemma: null }, { lemma: '' }] },
+                select: { en: true },
+            }),
+            this.prisma.extractedWord.findMany({
+                where: { documentId, OR: [{ lemma: null }, { lemma: '' }] },
+                select: { word: true },
+            }),
+        ]);
+        const wordsToProcess = Array.from(new Set([
+            ...alignedEmpty.map(p => p.en.trim()),
+            ...extractedEmpty.map(w => w.word.trim())
+        ])).filter(Boolean);
+        this.logger.log(`Total words to process for backfill: ${wordsToProcess.length}`);
+        if (wordsToProcess.length === 0) {
+            return { total: 0, message: '该文档所有单词的原形已是最新，无需同步。' };
+        }
+        const batchSize = 100;
+        let totalUpdated = 0;
+        for (let i = 0; i < wordsToProcess.length; i += batchSize) {
+            const batch = wordsToProcess.slice(i, i + batchSize);
+            try {
+                const lemmaMap = await this.aiService.getLemmasForWords(batch);
+                for (const [word, lemma] of Object.entries(lemmaMap)) {
+                    if (!lemma)
+                        continue;
+                    const cleanLemma = String(lemma).toLowerCase().trim();
+                    const [res1, res2] = await Promise.all([
+                        this.prisma.alignedWordPair.updateMany({
+                            where: {
+                                documentId,
+                                en: { equals: word, mode: 'insensitive' },
+                                OR: [{ lemma: null }, { lemma: '' }]
+                            },
+                            data: { lemma: cleanLemma },
+                        }),
+                        this.prisma.extractedWord.updateMany({
+                            where: {
+                                documentId,
+                                word: { equals: word, mode: 'insensitive' },
+                                OR: [{ lemma: null }, { lemma: '' }]
+                            },
+                            data: { lemma: cleanLemma },
+                        })
+                    ]);
+                    if (res1.count > 0 || res2.count > 0) {
+                        totalUpdated++;
+                    }
+                }
+            }
+            catch (error) {
+                this.logger.error(`Failed to process lemma batch: ${error.message}`);
+            }
+        }
+        this.logger.log(`Backfill completed. Total updated: ${totalUpdated}`);
+        return {
+            total: totalUpdated,
+            message: totalUpdated > 0
+                ? `成功同步并补全了 ${totalUpdated} 个单词的原形。`
+                : '同步完成，但未发现新的原形变更。'
+        };
     }
 };
 exports.DocumentService = DocumentService;

@@ -74,6 +74,12 @@ let DocumentController = class DocumentController {
     async getWordQuiz(id, limit) {
         return this.documentService.getWordQuiz(id, limit ? parseInt(limit) : 40);
     }
+    async exportLemmas(id) {
+        return this.documentService.exportLemmas(id);
+    }
+    async backfillLemmas(id) {
+        return this.documentService.backfillLemmas(id);
+    }
 };
 exports.DocumentController = DocumentController;
 __decorate([
@@ -200,6 +206,20 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], DocumentController.prototype, "getWordQuiz", null);
+__decorate([
+    (0, common_1.Get)(':id/export-lemmas'),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "exportLemmas", null);
+__decorate([
+    (0, common_1.Post)(':id/lemmas/backfill'),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "backfillLemmas", null);
 exports.DocumentController = DocumentController = __decorate([
     (0, common_1.Controller)('documents'),
     __metadata("design:paramtypes", [document_service_1.DocumentService])

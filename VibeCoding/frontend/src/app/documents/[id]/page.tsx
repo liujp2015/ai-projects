@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { fetchDocument, fetchDocumentTranslation, fetchQuestionBank, generateQuestionBank, DocumentDetail, DocumentTranslation, ExerciseQuestion, lookupWord, WordDefinition, translateMissingSentences, translateAlignRebuild, upsertUserWord, deleteUserWord, fetchUserWords, UserWord, getTTSUrl, validateSentence, AIValidationResult, appendText, appendImages, extractWordsFromDocument, fetchExtractedWords, ExtractedWord, generateWordQuiz, fetchWordQuizQuestions, WordQuizQuestion } from '@/lib/api';
+import { fetchDocument, fetchDocumentTranslation, fetchQuestionBank, generateQuestionBank, DocumentDetail, DocumentTranslation, ExerciseQuestion, lookupWord, WordDefinition, translateMissingSentences, translateAlignRebuild, upsertUserWord, deleteUserWord, fetchUserWords, UserWord, getTTSUrl, validateSentence, AIValidationResult, appendText, appendImages, extractWordsFromDocument, fetchExtractedWords, ExtractedWord, generateWordQuiz, fetchWordQuizQuestions, WordQuizQuestion, importReviewCards, fetchReviewSummary, exportDocumentLemmas, backfillDocumentLemmas } from '@/lib/api';
 import Link from 'next/link';
 
 const isWordToken = (token: string) => /^[a-zA-Z0-9'-]+$/.test(token);
@@ -102,6 +102,12 @@ export default function DocumentDetailPage() {
   const [extractingWords, setExtractingWords] = useState(false);
   const [wordsLoading, setWordsLoading] = useState(false);
   const [selectedPartOfSpeech, setSelectedPartOfSpeech] = useState<string>('all'); // 'all', 'noun', 'verb', 'adjective', 'adverb'
+  const [backfilling, setBackfilling] = useState(false);
+
+  // Review cards (independent from old UserWord feature)
+  const [reviewSummary, setReviewSummary] = useState<{ dueCount: number; learningCount: number; masteredCount: number; totalCount: number } | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [importingReview, setImportingReview] = useState(false);
 
   // 业务逻辑函数
   const loadTranslation = async () => {
@@ -273,6 +279,7 @@ export default function DocumentDetailPage() {
     if (viewTab === 'translation') {
       loadTranslation();
       loadExtractedWords();
+      loadReviewSummary();
     }
   }, [viewTab, id]);
 
@@ -286,6 +293,37 @@ export default function DocumentDetailPage() {
       console.error('Failed to load extracted words', err);
     } finally {
       setWordsLoading(false);
+    }
+  };
+
+  const loadReviewSummary = async () => {
+    if (!id) return;
+    try {
+      setReviewLoading(true);
+      const summary = await fetchReviewSummary(id as string);
+      setReviewSummary(summary);
+    } catch (err) {
+      console.warn('Failed to load review summary', err);
+      setReviewSummary(null);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const handleImportReviewCards = async () => {
+    if (!id || importingReview) return;
+    try {
+      setImportingReview(true);
+      const res = await importReviewCards(id as string);
+      await loadReviewSummary();
+      alert(
+        `导入完成：\n总数 ${res.total}\n新增 ${res.inserted}\n更新 ${res.updated}\n跳过 ${res.skipped}` +
+          (res.message ? `\n\n提示：${res.message}` : ''),
+      );
+    } catch (err) {
+      alert('导入失败，请检查后端连接：' + (err as Error).message);
+    } finally {
+      setImportingReview(false);
     }
   };
 
@@ -308,6 +346,23 @@ export default function DocumentDetailPage() {
       loadExtractedWords();
     }
   }, [selectedPartOfSpeech, viewTab, id]);
+
+  const handleBackfillLemmas = async () => {
+    if (!id || backfilling) return;
+    try {
+      setBackfilling(true);
+      const res = await backfillDocumentLemmas(id as string);
+      alert(res.message);
+      // 刷新数据展示
+      const docData = await fetchDocument(id as string);
+      setDoc(docData);
+      await loadExtractedWords();
+    } catch (err) {
+      alert('补全原形失败：' + (err as Error).message);
+    } finally {
+      setBackfilling(false);
+    }
+  };
 
   const handleAppendText = async () => {
     if (!id || !appendTextContent.trim() || appending) return;
@@ -708,41 +763,121 @@ export default function DocumentDetailPage() {
             <div className="space-y-8">
               {(!showTest && !showWordQuiz) ? (
                 <>
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-blue-50 p-4 md:p-6 rounded-2xl md:rounded-3xl border border-blue-100">
-                    <div>
-                      <h2 className="text-blue-800 font-bold">学习内容对照</h2>
-                      <p className="text-sm text-blue-600 mt-1">
-                        基于图片识别的结构化对照数据
-                      </p>
+                  <div className="flex flex-col gap-4 bg-blue-50 p-4 md:p-6 rounded-2xl md:rounded-3xl border border-blue-100">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                      <div>
+                        <h2 className="text-blue-800 font-bold">学习内容对照</h2>
+                        <p className="text-xs md:text-sm text-blue-600 mt-1">
+                          基于图片识别的结构化对照数据
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 md:gap-3">
+                        <button
+                          onClick={handleGenerateQuestions}
+                          disabled={generatingQuestions}
+                          className="px-3 md:px-6 py-2 bg-indigo-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-indigo-700 transition-all disabled:opacity-50"
+                        >
+                          {generatingQuestions ? '...' : '生成题库'}
+                        </button>
+                        <button
+                          onClick={handleGenerateWordQuiz}
+                          disabled={generatingWordQuiz}
+                          className="px-3 md:px-6 py-2 bg-purple-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-purple-700 transition-all disabled:opacity-50"
+                        >
+                          {generatingWordQuiz ? '...' : '生成单词题'}
+                        </button>
+                        <button
+                          onClick={startTest}
+                          className="px-3 md:px-6 py-2 bg-black text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:scale-105 transition-all"
+                        >
+                          综合测试
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (!id) return;
+                            try {
+                              const txt = await exportDocumentLemmas(id as string);
+                              const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = `${doc.title || 'lemmas'}.txt`;
+                              document.body.appendChild(a);
+                              a.click();
+                              a.remove();
+                              URL.revokeObjectURL(url);
+                            } catch (e: any) {
+                              alert('导出失败：' + (e?.message || e));
+                            }
+                          }}
+                          className="px-3 md:px-6 py-2 bg-emerald-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-emerald-700 transition-all"
+                        >
+                          导出原形
+                        </button>
+                        <button
+                          onClick={handleBackfillLemmas}
+                          disabled={backfilling}
+                          className="px-3 md:px-6 py-2 bg-orange-500 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-orange-600 transition-all disabled:opacity-50"
+                        >
+                          {backfilling ? '同步中...' : '同步旧原形'}
+                        </button>
+                        <button
+                          onClick={startWordQuiz}
+                          disabled={loadingWordQuiz}
+                          className="px-3 md:px-6 py-2 bg-gray-900 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-gray-800 transition-all disabled:opacity-50"
+                        >
+                          {loadingWordQuiz ? '...' : '单词测试'}
+                        </button>
+                      </div>
                     </div>
-                    <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 md:gap-3">
-                      <button
-                        onClick={handleGenerateQuestions}
-                        disabled={generatingQuestions}
-                        className="px-3 md:px-6 py-2 bg-indigo-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-indigo-700 transition-all disabled:opacity-50"
-                      >
-                        {generatingQuestions ? '生成中...' : '生成题库（DeepSeek）'}
-                      </button>
-                      <button
-                        onClick={handleGenerateWordQuiz}
-                        disabled={generatingWordQuiz}
-                        className="px-6 py-2 bg-purple-600 text-white rounded-full text-sm font-bold shadow-md hover:bg-purple-700 transition-all disabled:opacity-50"
-                      >
-                        {generatingWordQuiz ? '生成中...' : '生成句子单词测试题（DeepSeek）'}
-                      </button>
-                      <button
-                        onClick={startTest}
-                        className="px-6 py-2 bg-black text-white rounded-full text-sm font-bold shadow-md hover:scale-105 transition-all"
-                      >
-                        开始测试
-                      </button>
-                      <button
-                        onClick={startWordQuiz}
-                        disabled={loadingWordQuiz}
-                        className="px-6 py-2 bg-gray-900 text-white rounded-full text-sm font-bold shadow-md hover:bg-gray-800 transition-all disabled:opacity-50"
-                      >
-                        {loadingWordQuiz ? '加载中...' : '句子单词测试'}
-                      </button>
+
+                    {/* 新增：复习单词功能区域 */}
+                    <div className="pt-4 border-t border-blue-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-4">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">复习进度</span>
+                          {reviewLoading ? (
+                            <div className="h-5 w-24 bg-blue-100 animate-pulse rounded mt-1"></div>
+                          ) : reviewSummary ? (
+                            <div className="flex items-center gap-3 mt-1">
+                              <div className="flex items-center gap-1" title="今日待复习">
+                                <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                                <span className="text-sm font-bold text-gray-700">{reviewSummary.dueCount}</span>
+                              </div>
+                              <div className="flex items-center gap-1" title="正在学习中">
+                                <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                                <span className="text-sm font-bold text-gray-700">{reviewSummary.learningCount}</span>
+                              </div>
+                              <div className="flex items-center gap-1" title="已掌握">
+                                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                                <span className="text-sm font-bold text-gray-700">{reviewSummary.masteredCount}</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-blue-400 mt-1 italic">未导入复习卡片</span>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleImportReviewCards}
+                          disabled={importingReview}
+                          className="flex-1 sm:flex-none px-4 py-2 bg-white border border-blue-200 text-blue-600 rounded-xl text-xs font-bold hover:bg-blue-50 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          {importingReview ? '导入中...' : '导入到复习'}
+                        </button>
+                        {reviewSummary && reviewSummary.totalCount > 0 && (
+                          <Link
+                            href={`/documents/${id}/review-cards`}
+                            className="flex-1 sm:flex-none px-6 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-md hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+                            开始刷词 ({reviewSummary.dueCount})
+                          </Link>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -793,25 +928,38 @@ export default function DocumentDetailPage() {
                               词汇对照表
                             </h3>
                           </div>
-                          <div className="grid grid-cols-2 gap-0 border-b border-gray-100 bg-gray-50/50">
+                          <div className="grid grid-cols-3 gap-0 border-b border-gray-100 bg-gray-50/50">
                             <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">中文单词</div>
                             <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">English Word</div>
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Lemma</div>
                           </div>
                           <div className="divide-y divide-gray-100">
                             {(() => {
+                              const aligned = (doc as any).alignedWordPairs as Array<{ zh: string; en: string; lemma?: string | null }> | undefined;
+
+                              if (aligned && aligned.length > 0) {
+                                return aligned.map((item, idx) => (
+                                  <div key={idx} className="grid grid-cols-3 gap-0 hover:bg-gray-50 transition-colors">
+                                    <div className="p-4 text-sm text-gray-800 border-r border-gray-100">{item.zh}</div>
+                                    <div className="p-4 text-sm text-gray-900 font-bold border-r border-gray-100">{item.en}</div>
+                                    <div className="p-4 text-sm text-gray-700 font-mono">{item.lemma || '-'}</div>
+                                  </div>
+                                ));
+                              }
+
+                              // 兼容旧数据：回退到按行解析（无 lemma）
                               const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
                               const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-                              
-                              // 剩下的通常是单词
                               const words = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
                                 .filter(item => item.en && !(item.en.includes(' ') && item.en.length > 15));
 
                               if (words.length === 0) return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到单词对照</div>;
 
                               return words.map((item, idx) => (
-                                <div key={idx} className="grid grid-cols-2 gap-0 hover:bg-gray-50 transition-colors">
+                                <div key={idx} className="grid grid-cols-3 gap-0 hover:bg-gray-50 transition-colors">
                                   <div className="p-4 text-sm text-gray-800 border-r border-gray-100">{item.zh}</div>
-                                  <div className="p-4 text-sm text-gray-900 font-bold">{item.en}</div>
+                                  <div className="p-4 text-sm text-gray-900 font-bold border-r border-gray-100">{item.en}</div>
+                                  <div className="p-4 text-sm text-gray-700 font-mono">-</div>
                                 </div>
                               ));
                             })()}
@@ -879,8 +1027,13 @@ export default function DocumentDetailPage() {
                                   >
                                     <div className="flex items-start justify-between gap-2">
                                       <div className="flex-1">
-                                        <div className="flex items-center gap-2 mb-1">
+                                        <div className="flex items-center gap-2 mb-1 flex-wrap">
                                           <span className="text-sm font-bold text-gray-900">{word.word}</span>
+                                          {word.lemma && (
+                                            <span className="text-[10px] px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full font-mono">
+                                              {word.lemma}
+                                            </span>
+                                          )}
                                           <span className="text-[10px] px-2 py-0.5 bg-purple-100 text-purple-600 rounded-full uppercase">
                                             {word.partOfSpeech}
                                           </span>

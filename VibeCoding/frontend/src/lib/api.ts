@@ -48,6 +48,13 @@ export type DocumentItem = {
   englishText?: string | null;
   createdAt: string;
   updatedAt: string;
+  alignedWordPairs?: Array<{
+    id: string;
+    en: string;
+    zh: string;
+    lemma?: string | null;
+    orderIndex: number;
+  }>;
 };
 
 export type DocumentDetail = DocumentItem & {
@@ -363,6 +370,7 @@ export async function fetchDocumentTranslation(id: string): Promise<DocumentTran
 export type ExtractedWord = {
   id: string;
   word: string;
+  lemma: string | null;
   partOfSpeech: string;
   translation: string | null;
   sentence: string;
@@ -414,6 +422,20 @@ export async function generateWordQuiz(id: string, force: boolean = false): Prom
 export async function fetchWordQuizQuestions(id: string, limit: number = 9999): Promise<WordQuizQuestion[]> {
   const res = await apiFetch(`/api/documents/${id}/word-quiz?limit=${limit}`);
   if (!res.ok) throw new Error(`Failed to fetch word quiz: ${res.status}`);
+  return res.json();
+}
+
+export async function exportDocumentLemmas(id: string): Promise<string> {
+  const res = await apiFetch(`/api/documents/${id}/export-lemmas`);
+  if (!res.ok) throw new Error(`Failed to export lemmas: ${res.status}`);
+  return res.text();
+}
+
+export async function backfillDocumentLemmas(id: string): Promise<{ total: number; message: string }> {
+  const res = await apiFetch(`/api/documents/${id}/lemmas/backfill`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`Failed to backfill lemmas: ${res.status}`);
   return res.json();
 }
 
@@ -478,5 +500,52 @@ export async function resetDatabase(): Promise<{ message: string; timestamp: str
     method: 'POST',
   });
   if (!res.ok) throw new Error(`Failed to reset database: ${res.status}`);
+  return res.json();
+}
+
+// ------------------------------
+// Review Cards (independent from UserWord)
+// ------------------------------
+export type ReviewCard = {
+  id: string;
+  documentId: string;
+  word: string;
+  partOfSpeech: string;
+  translation: string | null;
+  sentence: string | null;
+  stage: number;
+  lastReviewAt: string | null;
+  nextReviewAt: string;
+  status: 'LEARNING' | 'MASTERED';
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function importReviewCards(documentId: string): Promise<{ total: number; inserted: number; updated: number; skipped: number; message?: string }> {
+  const res = await apiFetch(`/api/review/import/${documentId}`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`Failed to import review cards: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchReviewSummary(documentId: string): Promise<{ dueCount: number; learningCount: number; masteredCount: number; totalCount: number }> {
+  const res = await apiFetch(`/api/review/summary?documentId=${encodeURIComponent(documentId)}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Failed to fetch review summary: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchDueReviewCards(documentId: string, limit: number = 50): Promise<ReviewCard[]> {
+  const res = await apiFetch(`/api/review/due?documentId=${encodeURIComponent(documentId)}&limit=${limit}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Failed to fetch due review cards: ${res.status}`);
+  return res.json();
+}
+
+export async function gradeReviewCard(cardId: string, result: 'GOOD' | 'AGAIN'): Promise<ReviewCard> {
+  const res = await apiFetch(`/api/review/${encodeURIComponent(cardId)}/grade`, {
+    method: 'POST',
+    body: JSON.stringify({ result }),
+  });
+  if (!res.ok) throw new Error(`Failed to grade review card: ${res.status}`);
   return res.json();
 }

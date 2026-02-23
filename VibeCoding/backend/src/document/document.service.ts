@@ -63,6 +63,7 @@ export class DocumentService {
     const originalTexts: string[] = [];
     const chineseTexts: string[] = [];
     const englishTexts: string[] = [];
+    const allWordPairs: Array<{ en: string; zh: string; lemma?: string }> = [];
 
     for (const file of files) {
       const mimeType = file.mimetype;
@@ -74,6 +75,9 @@ export class DocumentService {
       originalTexts.push(ocrResult.originalText);
       chineseTexts.push(ocrResult.chineseText);
       englishTexts.push(ocrResult.englishText);
+      if (ocrResult.wordPairs) {
+        allWordPairs.push(...ocrResult.wordPairs);
+      }
     }
 
     // 合并所有 OCR 结果
@@ -90,6 +94,7 @@ export class DocumentService {
       `${title}.images`,
       files.reduce((sum, f) => sum + f.size, 0),
       'image/*',
+      allWordPairs,
     );
   }
 
@@ -105,6 +110,7 @@ export class DocumentService {
     filename: string,
     fileSize: number,
     mimeType: string,
+    wordPairs: Array<{ en: string; zh: string; lemma?: string }> = [],
   ) {
     // 1. Create Document metadata with OCR results
     const document = await this.prisma.document.create({
@@ -118,6 +124,19 @@ export class DocumentService {
         englishText: englishText,     // 存储纯英文的句子和单词
       },
     });
+
+    // 1.5 保存结构化单词对
+    if (wordPairs.length > 0) {
+      await this.prisma.alignedWordPair.createMany({
+        data: wordPairs.map((p, i) => ({
+          en: p.en,
+          zh: p.zh,
+          lemma: p.lemma || null,
+          orderIndex: i,
+          documentId: document.id,
+        })),
+      });
+    }
 
     // 2. 仍然将原文保存为段落和句子结构（用于后续处理）
     return this.saveStructuredContent(originalText, title, filename, fileSize, mimeType, document.id);
@@ -189,6 +208,9 @@ export class DocumentService {
             sentences: { orderBy: { orderIndex: 'asc' } },
           },
         },
+        alignedWordPairs: {
+          orderBy: { orderIndex: 'asc' },
+        },
       },
     });
   }
@@ -242,15 +264,29 @@ export class DocumentService {
     );
 
     // 4. 更新文档的结构化文本字段（不重建段落和句子结构）
-    // 注意：段落和句子结构保持不变，只更新Document表的结构化文本字段
-    // 生成测试题时会根据chineseText和englishText生成，不需要重建段落结构
-    await this.prisma.document.update({
-      where: { id: documentId },
-      data: {
-        originalText: mergedResult.originalText,
-        chineseText: mergedResult.chineseText,
-        englishText: mergedResult.englishText,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.document.update({
+        where: { id: documentId },
+        data: {
+          originalText: mergedResult.originalText,
+          chineseText: mergedResult.chineseText,
+          englishText: mergedResult.englishText,
+        },
+      });
+
+      // 同步更新单词对
+      if (mergedResult.wordPairs && mergedResult.wordPairs.length > 0) {
+        await tx.alignedWordPair.deleteMany({ where: { documentId } });
+        await tx.alignedWordPair.createMany({
+          data: mergedResult.wordPairs.map((p, i) => ({
+            en: p.en,
+            zh: p.zh,
+            lemma: p.lemma || null,
+            orderIndex: i,
+            documentId,
+          })),
+        });
+      }
     });
 
     this.logger.log(`Successfully appended text to document ${documentId}. Content merged and structured.`);
@@ -284,15 +320,29 @@ export class DocumentService {
     );
 
     // 3. 更新文档的结构化文本字段（不重建段落和句子结构）
-    // 注意：段落和句子结构保持不变，只更新Document表的结构化文本字段
-    // 生成测试题时会根据chineseText和englishText生成，不需要重建段落结构
-    await this.prisma.document.update({
-      where: { id: documentId },
-      data: {
-        originalText: mergedResult.originalText,
-        chineseText: mergedResult.chineseText,
-        englishText: mergedResult.englishText,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.document.update({
+        where: { id: documentId },
+        data: {
+          originalText: mergedResult.originalText,
+          chineseText: mergedResult.chineseText,
+          englishText: mergedResult.englishText,
+        },
+      });
+
+      // 同步更新单词对
+      if (mergedResult.wordPairs && mergedResult.wordPairs.length > 0) {
+        await tx.alignedWordPair.deleteMany({ where: { documentId } });
+        await tx.alignedWordPair.createMany({
+          data: mergedResult.wordPairs.map((p, i) => ({
+            en: p.en,
+            zh: p.zh,
+            lemma: p.lemma || null,
+            orderIndex: i,
+            documentId,
+          })),
+        });
+      }
     });
 
     this.logger.log(`Successfully appended ${files.length} image(s) to document ${documentId}. Content merged and structured.`);
@@ -860,7 +910,7 @@ export class DocumentService {
       this.logger.log(`Processing ${batches.length} batches of sentences`);
 
       // 调用 AI 提取词性（分批处理）
-      const allExtractedWords: Array<{ word: string; partOfSpeech: string; translation: string; sentence: string }> = [];
+      const allExtractedWords: Array<{ word: string; lemma: string | null; partOfSpeech: string; translation: string; sentence: string }> = [];
       for (let i = 0; i < batches.length; i++) {
         try {
           this.logger.log(`Processing batch ${i + 1}/${batches.length} (${batches[i].length} sentences)`);
@@ -886,6 +936,7 @@ export class DocumentService {
         await this.prisma.extractedWord.createMany({
           data: extractedWords.map(w => ({
             word: w.word,
+            lemma: w.lemma || null,
             partOfSpeech: w.partOfSpeech,
             translation: w.translation || null,
             sentence: w.sentence,
@@ -921,5 +972,154 @@ export class DocumentService {
     });
 
     return words;
+  }
+
+  async exportLemmas(documentId: string) {
+    const [aligned, extracted] = await Promise.all([
+      this.prisma.alignedWordPair.findMany({
+        where: { documentId },
+        select: { lemma: true },
+      }),
+      this.prisma.extractedWord.findMany({
+        where: { documentId },
+        select: { lemma: true },
+      }),
+    ]);
+
+    const lemmas = [...aligned, ...extracted]
+      .map((x) => (x.lemma ?? '').trim().toLowerCase())
+      .filter(Boolean)
+      .map((l) => l.replace(/\s+/g, '#'));
+
+    // 去重并保持相对稳定顺序
+    const seen = new Set<string>();
+    const uniq: string[] = [];
+    for (const w of lemmas) {
+      if (seen.has(w)) continue;
+      seen.add(w);
+      uniq.push(w);
+    }
+
+    // 文档内容：空格分隔
+    return uniq.join(' ');
+  }
+
+  /**
+   * 补全旧数据的单词原形
+   */
+  async backfillLemmas(documentId: string) {
+    const doc = await this.prisma.document.findUnique({
+      where: { id: documentId },
+      include: { alignedWordPairs: true }
+    });
+
+    if (!doc) throw new Error('Document not found');
+
+    this.logger.log(`Starting backfill for document: ${documentId}. Current alignedWordPairs count: ${doc.alignedWordPairs.length}`);
+
+    // 1. 如果 alignedWordPairs 为空，说明是极老的数据，尝试从 englishText/chineseText 初始化
+    if (doc.alignedWordPairs.length === 0 && doc.chineseText && doc.englishText) {
+      this.logger.log(`Initializing alignedWordPairs from text for document ${documentId}`);
+      const zhLines = doc.chineseText.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      const enLines = doc.englishText.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      
+      const words: Array<{ zh: string; en: string }> = [];
+      const maxLines = Math.min(zhLines.length, enLines.length);
+      
+      for (let i = 0; i < maxLines; i++) {
+        const zh = zhLines[i];
+        const en = enLines[i];
+        // 启发式区分单词：不包含空格或长度短
+        if (en && !(en.includes(' ') && en.length > 15)) {
+          words.push({ zh, en });
+        }
+      }
+
+      if (words.length > 0) {
+        await this.prisma.alignedWordPair.createMany({
+          data: words.map((p, i) => ({
+            en: p.en.trim(),
+            zh: p.zh.trim(),
+            orderIndex: i,
+            documentId,
+          })),
+        });
+        this.logger.log(`Initialized ${words.length} alignedWordPairs for document ${documentId}.`);
+      }
+    }
+
+    // 2. 重新获取所有需要补全的单词（包括刚才初始化的）
+    const [alignedEmpty, extractedEmpty] = await Promise.all([
+      this.prisma.alignedWordPair.findMany({
+        where: { documentId, OR: [{ lemma: null }, { lemma: '' }] },
+        select: { en: true },
+      }),
+      this.prisma.extractedWord.findMany({
+        where: { documentId, OR: [{ lemma: null }, { lemma: '' }] },
+        select: { word: true },
+      }),
+    ]);
+
+    const wordsToProcess = Array.from(new Set([
+      ...alignedEmpty.map(p => p.en.trim()),
+      ...extractedEmpty.map(w => w.word.trim())
+    ])).filter(Boolean);
+
+    this.logger.log(`Total words to process for backfill: ${wordsToProcess.length}`);
+
+    if (wordsToProcess.length === 0) {
+      return { total: 0, message: '该文档所有单词的原形已是最新，无需同步。' };
+    }
+
+    // 3. 调用 AI 批量获取原形
+    // 限制单次请求数量，避免 prompt 过长
+    const batchSize = 100;
+    let totalUpdated = 0;
+
+    for (let i = 0; i < wordsToProcess.length; i += batchSize) {
+      const batch = wordsToProcess.slice(i, i + batchSize);
+      try {
+        const lemmaMap = await this.aiService.getLemmasForWords(batch);
+        
+        // 4. 更新数据库
+        for (const [word, lemma] of Object.entries(lemmaMap)) {
+          if (!lemma) continue;
+          const cleanLemma = String(lemma).toLowerCase().trim();
+          
+          const [res1, res2] = await Promise.all([
+            this.prisma.alignedWordPair.updateMany({
+              where: { 
+                documentId, 
+                en: { equals: word, mode: 'insensitive' }, 
+                OR: [{ lemma: null }, { lemma: '' }] 
+              },
+              data: { lemma: cleanLemma },
+            }),
+            this.prisma.extractedWord.updateMany({
+              where: { 
+                documentId, 
+                word: { equals: word, mode: 'insensitive' }, 
+                OR: [{ lemma: null }, { lemma: '' }] 
+              },
+              data: { lemma: cleanLemma },
+            })
+          ]);
+          
+          if (res1.count > 0 || res2.count > 0) {
+            totalUpdated++;
+          }
+        }
+      } catch (error: any) {
+        this.logger.error(`Failed to process lemma batch: ${error.message}`);
+      }
+    }
+
+    this.logger.log(`Backfill completed. Total updated: ${totalUpdated}`);
+    return { 
+      total: totalUpdated, 
+      message: totalUpdated > 0 
+        ? `成功同步并补全了 ${totalUpdated} 个单词的原形。` 
+        : '同步完成，但未发现新的原形变更。' 
+    };
   }
 }

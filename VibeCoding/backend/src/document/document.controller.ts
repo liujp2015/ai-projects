@@ -132,5 +132,15 @@ export class DocumentController {
   ) {
     return this.documentService.getWordQuiz(id, limit ? parseInt(limit) : 40);
   }
+
+  @Get(':id/export-lemmas')
+  async exportLemmas(@Param('id') id: string) {
+    return this.documentService.exportLemmas(id);
+  }
+
+  @Post(':id/lemmas/backfill')
+  async backfillLemmas(@Param('id') id: string) {
+    return this.documentService.backfillLemmas(id);
+  }
 }
 

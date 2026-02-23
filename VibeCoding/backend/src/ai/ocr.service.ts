@@ -143,16 +143,17 @@ export class OCRService {
       '    { "en": "纯英文句子", "zh": "纯中文翻译" }\n' +
       '  ],\n' +
       '  "wordPairs": [\n' +
-      '    { "en": "纯英文单词", "zh": "纯中文对照" }\n' +
+      '    { "en": "纯英文单词", "zh": "纯中文对照", "lemma": "该英文单词的纯单词原形" }\n' +
       '  ]\n' +
       '}\n' +
       '\n' +
       '强约束：\n' +
       '1. sentencePairs 必须是语义完整的句子，wordPairs 必须是独立的单词或短语。\n' +
       '2. en 字段必须是纯英文（ASCII），zh 字段必须是纯中文。\n' +
-      '3. 严禁包含音标/IPA（如 /ˈ.../ 等）或词性标注（如 n., v. 等）。\n' +
-      '4. 所有字段值必须是字符串，不允许数组或对象。\n' +
-      '5. 输出必须只有 JSON，不要有任何额外文字或 Markdown 标记。'
+      '3. lemma 字段必须是该英文单词的纯单词原形（小写），不包含任何词性或解释。\n' +
+      '4. 严禁包含音标/IPA（如 /ˈ.../ 等）或词性标注（如 n., v. 等）。\n' +
+      '5. 所有字段值必须是字符串，不允许数组或对象。\n' +
+      '6. 输出必须只有 JSON，不要有任何额外文字或 Markdown 标记。'
     );
   }
 
@@ -213,6 +214,7 @@ export class OCRService {
     originalText: string;
     chineseText: string;
     englishText: string;
+    wordPairs?: Array<{ en: string; zh: string; lemma?: string }>;
   }> {
     if (this.provider === OCRProvider.QWEN) {
       return this.qwenOCR(file.buffer);
@@ -264,6 +266,7 @@ export class OCRService {
     originalText: string;
     chineseText: string;
     englishText: string;
+    wordPairs?: Array<{ en: string; zh: string; lemma?: string }>;
   }> {
     const config = getQwenConfig();
 
@@ -309,20 +312,21 @@ export class OCRService {
                   '   - 严禁包含独立的单词对照。\n' +
                   '   - en: 纯英文句子；zh: 纯中文翻译。\n' +
                   '\n' +
-                  '3. **wordPairs**: 从文本中提取【独立的单词】及其中文对照。\n' +
+                  '3. **wordPairs**: 从文本中提取【独立的单词】及其中文对照，并给出单词原形（lemma）。\n' +
                   '   - 必须是独立的单词或短语（如词汇表、标注的关键词）。\n' +
-                  '   - en: 纯英文单词；zh: 纯中文对照。\n' +
+                  '   - en: 纯英文单词；zh: 纯中文对照；lemma: 该英文单词的纯单词原形（小写，不要词性/解释）。\n' +
                   '\n' +
                   '请以 JSON 格式返回结果：\n' +
                   '{\n' +
                   '  "originalText": "...",\n' +
                   '  "sentencePairs": [{ "en": "...", "zh": "..." }],\n' +
-                  '  "wordPairs": [{ "en": "...", "zh": "..." }]\n' +
+                  '  "wordPairs": [{ "en": "...", "zh": "...", "lemma": "..." }]\n' +
                   '}\n' +
                   '\n' +
                   '注意：\n' +
                   '- 严禁在 en 字段包含中文，严禁在 zh 字段包含英文。\n' +
                   '- 严禁包含音标/IPA（如 /ˈ.../ 等）或词性标注（如 n., v. 等）。\n' +
+                  '- wordPairs 中的 lemma 必须为纯英文单词原形（小写），不包含任何词性/解释。\n' +
                   '- 如果图片中只有句子或只有单词，请将另一个数组设为空 []。\n' +
                   '- 输出必须是合法 JSON，不要有任何 Markdown 标记。',
               },
@@ -378,7 +382,7 @@ export class OCRService {
       this.logger.log('=== originalText 结束 ===');
 
       // Prefer `sentencePairs` and `wordPairs` to avoid length mismatch
-      type Pair = { en: string; zh: string };
+      type Pair = { en: string; zh: string; lemma?: string };
       let enLines: string[] = [];
       let zhLines: string[] = [];
 
@@ -391,8 +395,9 @@ export class OCRService {
           try {
             const en = this.coercePairText(item.en, `${label}[${idx}].en`).trim();
             const zh = this.coercePairText(item.zh, `${label}[${idx}].zh`).trim();
+            const lemma = typeof item.lemma === 'string' ? item.lemma.trim().toLowerCase() : undefined;
             if (en && zh) {
-              result.push({ en, zh });
+              result.push({ en, zh, lemma });
             }
           } catch (e) {
             this.logger.warn(`${label}[${idx}] 解析失败: ${this.getErrorMessage(e)}`);
@@ -597,6 +602,7 @@ export class OCRService {
           originalText: originalText2,
           chineseText: zhLines2.join('\n'),
           englishText: enLines2.join('\n'),
+          wordPairs: wordPairs2.map(p => ({ en: p.en, zh: p.zh, lemma: p.lemma })),
         };
       }
 
@@ -604,6 +610,7 @@ export class OCRService {
         originalText,
         chineseText: zhLines.join('\n'),
         englishText: enLines.join('\n'),
+        wordPairs: wordPairs.map(p => ({ en: p.en, zh: p.zh, lemma: p.lemma })),
       };
 
       // 打印最终返回的数据（用于调试）
@@ -646,6 +653,7 @@ export class OCRService {
     originalText: string;
     chineseText: string;
     englishText: string;
+    wordPairs?: Array<{ en: string; zh: string; lemma?: string }>;
   }> {
     const config = getQwenConfig();
 

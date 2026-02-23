@@ -19,16 +19,32 @@ export default function ReviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [playingText, setPlayingText] = useState<string | null>(null);
 
-  const playAudio = (text: string) => {
+  const playAudio = async (text: string) => {
     if (playingText === text) return;
+    if (!text || !text.trim()) return;
+    
     setPlayingText(text);
-    const audio = new Audio(getTTSUrl(text));
-    audio.onended = () => setPlayingText(null);
-    audio.onerror = () => {
-      alert('音频播放失败');
+    try {
+      const audio = new Audio(getTTSUrl(text));
+      
+      // 添加错误处理
+      audio.onerror = (e) => {
+        console.error('Audio playback error:', e);
+        setPlayingText(null);
+        // 不显示 alert，避免打断用户体验
+      };
+      
+      audio.onended = () => setPlayingText(null);
+      
+      // 尝试播放，如果失败会触发 onerror
+      await audio.play().catch((err) => {
+        console.error('Audio play failed:', err);
+        setPlayingText(null);
+      });
+    } catch (err) {
+      console.error('Failed to create audio:', err);
       setPlayingText(null);
-    };
-    audio.play();
+    }
   };
 
   useEffect(() => {

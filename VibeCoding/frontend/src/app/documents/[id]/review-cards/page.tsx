@@ -39,13 +39,122 @@ export default function ReviewCardsPage() {
     loadCards();
   }, [loadCards]);
 
-  const playAudio = (text: string) => {
+  const playAudio = async (text: string) => {
     if (playingText === text) return;
+    if (!text || !text.trim()) return;
+    
     setPlayingText(text);
-    const audio = new Audio(getTTSUrl(text));
-    audio.onended = () => setPlayingText(null);
-    audio.onerror = () => setPlayingText(null);
-    audio.play();
+    
+    // 首先尝试使用后端 TTS API
+    try {
+      const url = getTTSUrl(text);
+      const audio = new Audio(url);
+      
+      let fallbackUsed = false;
+      
+      // 添加错误处理
+      audio.onerror = async (e) => {
+        if (fallbackUsed) return;
+        fallbackUsed = true;
+        console.warn('Backend TTS failed, trying browser Speech Synthesis API...');
+        
+        // 降级到浏览器原生 TTS
+        try {
+          if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel(); // 取消之前的语音
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'en-US';
+            utterance.onend = () => setPlayingText(null);
+            utterance.onerror = () => setPlayingText(null);
+            window.speechSynthesis.speak(utterance);
+          } else {
+            setPlayingText(null);
+          }
+        } catch (fallbackErr) {
+          console.error('Fallback TTS also failed:', fallbackErr);
+          setPlayingText(null);
+        }
+      };
+      
+      audio.onended = () => {
+        if (!fallbackUsed) {
+          setPlayingText(null);
+        }
+      };
+      
+      // 设置超时，如果 5 秒内没有开始播放，使用降级方案
+      const timeout = setTimeout(() => {
+        if (audio.readyState === 0 && !fallbackUsed) {
+          fallbackUsed = true;
+          audio.load(); // 取消加载
+          console.warn('Backend TTS timeout, trying browser Speech Synthesis API...');
+          
+          // 降级到浏览器原生 TTS
+          try {
+            if ('speechSynthesis' in window) {
+              window.speechSynthesis.cancel();
+              const utterance = new SpeechSynthesisUtterance(text);
+              utterance.lang = 'en-US';
+              utterance.onend = () => setPlayingText(null);
+              utterance.onerror = () => setPlayingText(null);
+              window.speechSynthesis.speak(utterance);
+            } else {
+              setPlayingText(null);
+            }
+          } catch (fallbackErr) {
+            console.error('Fallback TTS also failed:', fallbackErr);
+            setPlayingText(null);
+          }
+        }
+      }, 5000);
+      
+      audio.addEventListener('canplay', () => {
+        clearTimeout(timeout);
+      }, { once: true });
+      
+      // 尝试播放
+      await audio.play().catch(async (err) => {
+        clearTimeout(timeout);
+        if (fallbackUsed) return;
+        fallbackUsed = true;
+        
+        // 降级到浏览器原生 TTS
+        try {
+          if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'en-US';
+            utterance.onend = () => setPlayingText(null);
+            utterance.onerror = () => setPlayingText(null);
+            window.speechSynthesis.speak(utterance);
+          } else {
+            setPlayingText(null);
+          }
+        } catch (fallbackErr) {
+          console.error('Fallback TTS also failed:', fallbackErr);
+          setPlayingText(null);
+        }
+      });
+    } catch (err) {
+      console.error('Failed to create audio:', err);
+      
+      // 降级到浏览器原生 TTS
+      try {
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = 'en-US';
+          utterance.onend = () => setPlayingText(null);
+          utterance.onerror = () => setPlayingText(null);
+          window.speechSynthesis.speak(utterance);
+        } else {
+          setPlayingText(null);
+        }
+      } catch (fallbackErr) {
+        console.error('Fallback TTS also failed:', fallbackErr);
+        setPlayingText(null);
+      }
+    }
   };
 
   const handleGrade = async (result: 'GOOD' | 'AGAIN') => {

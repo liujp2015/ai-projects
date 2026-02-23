@@ -455,17 +455,32 @@ export default function DocumentDetailPage() {
     }
   };
 
-  const playAudio = (text: string) => {
+  const playAudio = async (text: string) => {
     if (playingText === text) return;
+    if (!text || !text.trim()) return;
     
     setPlayingText(text);
-    const audio = new Audio(getTTSUrl(text));
-    audio.onended = () => setPlayingText(null);
-    audio.onerror = () => {
-      alert('音频播放失败');
+    try {
+      const audio = new Audio(getTTSUrl(text));
+      
+      // 添加错误处理
+      audio.onerror = (e) => {
+        console.error('Audio playback error:', e);
+        setPlayingText(null);
+        // 不显示 alert，避免打断用户体验
+      };
+      
+      audio.onended = () => setPlayingText(null);
+      
+      // 尝试播放，如果失败会触发 onerror
+      await audio.play().catch((err) => {
+        console.error('Audio play failed:', err);
+        setPlayingText(null);
+      });
+    } catch (err) {
+      console.error('Failed to create audio:', err);
       setPlayingText(null);
-    };
-    audio.play();
+    }
   };
 
   useEffect(() => {
@@ -608,8 +623,8 @@ export default function DocumentDetailPage() {
             </Link>
             <div className="flex flex-col overflow-hidden">
               <h1 className="text-base md:text-lg font-medium text-gray-900 truncate">
-                {doc.title}
-              </h1>
+              {doc.title}
+            </h1>
               <div className="flex gap-4 mt-1">
                 <button 
                   onClick={() => setViewTab('read')}
@@ -765,31 +780,31 @@ export default function DocumentDetailPage() {
                 <>
                   <div className="flex flex-col gap-4 bg-blue-50 p-4 md:p-6 rounded-2xl md:rounded-3xl border border-blue-100">
                     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                      <div>
-                        <h2 className="text-blue-800 font-bold">学习内容对照</h2>
+                    <div>
+                      <h2 className="text-blue-800 font-bold">学习内容对照</h2>
                         <p className="text-xs md:text-sm text-blue-600 mt-1">
-                          基于图片识别的结构化对照数据
-                        </p>
-                      </div>
+                        基于图片识别的结构化对照数据
+                      </p>
+                    </div>
                       <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 md:gap-3">
-                        <button
-                          onClick={handleGenerateQuestions}
-                          disabled={generatingQuestions}
+                      <button
+                        onClick={handleGenerateQuestions}
+                        disabled={generatingQuestions}
                           className="px-3 md:px-6 py-2 bg-indigo-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-indigo-700 transition-all disabled:opacity-50"
-                        >
+                      >
                           {generatingQuestions ? '...' : '生成题库'}
-                        </button>
-                        <button
-                          onClick={handleGenerateWordQuiz}
-                          disabled={generatingWordQuiz}
+                      </button>
+                      <button
+                        onClick={handleGenerateWordQuiz}
+                        disabled={generatingWordQuiz}
                           className="px-3 md:px-6 py-2 bg-purple-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-purple-700 transition-all disabled:opacity-50"
-                        >
+                      >
                           {generatingWordQuiz ? '...' : '生成单词题'}
-                        </button>
-                        <button
-                          onClick={startTest}
+                      </button>
+                      <button
+                        onClick={startTest}
                           className="px-3 md:px-6 py-2 bg-black text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:scale-105 transition-all"
-                        >
+                      >
                           综合测试
                         </button>
                         <button
@@ -820,14 +835,14 @@ export default function DocumentDetailPage() {
                           className="px-3 md:px-6 py-2 bg-orange-500 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-orange-600 transition-all disabled:opacity-50"
                         >
                           {backfilling ? '同步中...' : '同步旧原形'}
-                        </button>
-                        <button
-                          onClick={startWordQuiz}
-                          disabled={loadingWordQuiz}
+                      </button>
+                      <button
+                        onClick={startWordQuiz}
+                        disabled={loadingWordQuiz}
                           className="px-3 md:px-6 py-2 bg-gray-900 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-gray-800 transition-all disabled:opacity-50"
-                        >
+                      >
                           {loadingWordQuiz ? '...' : '单词测试'}
-                        </button>
+                      </button>
                       </div>
                     </div>
 

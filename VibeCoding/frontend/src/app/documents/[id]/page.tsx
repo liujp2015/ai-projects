@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { fetchDocument, fetchDocumentTranslation, fetchQuestionBank, generateQuestionBank, DocumentDetail, DocumentTranslation, ExerciseQuestion, lookupWord, WordDefinition, translateMissingSentences, translateAlignRebuild, upsertUserWord, deleteUserWord, fetchUserWords, UserWord, getTTSUrl, validateSentence, AIValidationResult, appendText, appendImages, extractWordsFromDocument, fetchExtractedWords, ExtractedWord, generateWordQuiz, fetchWordQuizQuestions, WordQuizQuestion, importReviewCards, fetchReviewSummary, exportDocumentLemmas, backfillDocumentLemmas } from '@/lib/api';
+import { fetchDocument, fetchDocumentTranslation, fetchQuestionBank, generateQuestionBank, DocumentDetail, DocumentTranslation, ExerciseQuestion, lookupWord, WordDefinition, translateMissingSentences, translateAlignRebuild, upsertUserWord, deleteUserWord, fetchUserWords, UserWord, getTTSUrl, validateSentence, AIValidationResult, appendText, appendImages, extractWordsFromDocument, fetchExtractedWords, ExtractedWord, generateWordQuiz, fetchWordQuizQuestions, WordQuizQuestion, importReviewCards, fetchReviewSummary, exportDocumentLemmas, backfillDocumentLemmas, updateAlignedWordPair } from '@/lib/api';
 import Link from 'next/link';
 
 const isWordToken = (token: string) => /^[a-zA-Z0-9'-]+$/.test(token);
@@ -153,14 +153,17 @@ export default function DocumentDetailPage() {
     if (!id || generatingQuestions) return;
     
     // Check if we should force regeneration
-    const force = confirm('是否要覆盖现有题库并重新生成？\n\n如果发现题目与答案不匹配，请选择“确定”以应用最新的生成逻辑。');
+    const force = confirm('是否要覆盖现有题库并重新生成？\n\n如果发现题目与答案不匹配，请选择"确定"以应用最新的生成逻辑。');
     
     try {
       setGeneratingQuestions(true);
       const res = await generateQuestionBank(id as string, force);
-      alert(`题库生成成功！共处理了 ${res.total} 个句子，生成了 ${res.generated} 道题目。`);
-    } catch (err) {
-      alert('题库生成失败，请检查后端配置或 DeepSeek API 额度');
+      const failedMsg = res.failed ? `，失败 ${res.failed} 个` : '';
+      alert(`题库生成成功！共处理了 ${res.total} 个句子，生成了 ${res.generated} 道题目${failedMsg}。`);
+    } catch (err: any) {
+      console.error('[handleGenerateQuestions] Error:', err);
+      const errorMsg = err?.message || '未知错误';
+      alert(`题库生成失败：${errorMsg}\n\n请检查后端控制台日志获取详细信息。`);
     } finally {
       setGeneratingQuestions(false);
     }
@@ -315,9 +318,13 @@ export default function DocumentDetailPage() {
     try {
       setImportingReview(true);
       const res = await importReviewCards(id as string);
-      await loadReviewSummary();
+      await Promise.all([
+        loadReviewSummary(),
+        fetchDocument(id as string).then(setDoc), // 刷新文档以显示词汇对照表中的词性
+      ]);
       alert(
         `导入完成：\n总数 ${res.total}\n新增 ${res.inserted}\n更新 ${res.updated}\n跳过 ${res.skipped}` +
+          (typeof res.posSynced === 'number' ? `\n词汇对照表词性同步 ${res.posSynced} 个` : '') +
           (res.message ? `\n\n提示：${res.message}` : ''),
       );
     } catch (err) {
@@ -937,32 +944,80 @@ export default function DocumentDetailPage() {
 
                         {/* 单词对照部分 */}
                         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-                          <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
-                            <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                              词汇对照表
-                            </h3>
+                          <div className="p-4 bg-gray-50 border-b border-gray-100 flex flex-col gap-1">
+                            <div className="flex justify-between items-center">
+                              <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                                词汇对照表
+                              </h3>
+                            </div>
+                            <p className="text-[10px] text-gray-400">
+                              词性来自「提取词性」，按单词在句子中的用法分类（非词典原形词性）。导入或同步后会填充，用于刷词时按词性筛选。
+                            </p>
                           </div>
-                          <div className="grid grid-cols-3 gap-0 border-b border-gray-100 bg-gray-50/50">
+                          <div className="grid grid-cols-5 gap-0 border-b border-gray-100 bg-gray-50/50">
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest w-12">重点</div>
                             <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">中文单词</div>
                             <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">English Word</div>
                             <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Lemma</div>
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">词性</div>
                           </div>
                           <div className="divide-y divide-gray-100">
                             {(() => {
-                              const aligned = (doc as any).alignedWordPairs as Array<{ zh: string; en: string; lemma?: string | null }> | undefined;
+                              const posOptions = ['noun', 'verb', 'adjective', 'adverb', 'unknown'];
+                              const aligned = (doc as any).alignedWordPairs as Array<{ id: string; zh: string; en: string; lemma?: string | null; partOfSpeech?: string | null; isImportant?: boolean }> | undefined;
 
                               if (aligned && aligned.length > 0) {
                                 return aligned.map((item, idx) => (
-                                  <div key={idx} className="grid grid-cols-3 gap-0 hover:bg-gray-50 transition-colors">
+                                  <div key={item.id || idx} className="grid grid-cols-5 gap-0 hover:bg-gray-50 transition-colors items-center">
+                                    <div className="p-4 flex justify-center">
+                                      <button
+                                        onClick={async () => {
+                                          try {
+                                            await updateAlignedWordPair(item.id, { isImportant: !item.isImportant });
+                                            // 局部更新状态
+                                            const updatedAligned = [...aligned];
+                                            updatedAligned[idx] = { ...item, isImportant: !item.isImportant };
+                                            setDoc({ ...doc, alignedWordPairs: updatedAligned } as any);
+                                          } catch (err) {
+                                            alert('更新失败');
+                                          }
+                                        }}
+                                        className={`transition-colors ${item.isImportant ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-400'}`}
+                                        title={item.isImportant ? '取消重点' : '设为重点'}
+                                      >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill={item.isImportant ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                                      </button>
+                                    </div>
                                     <div className="p-4 text-sm text-gray-800 border-r border-gray-100">{item.zh}</div>
                                     <div className="p-4 text-sm text-gray-900 font-bold border-r border-gray-100">{item.en}</div>
-                                    <div className="p-4 text-sm text-gray-700 font-mono">{item.lemma || '-'}</div>
+                                    <div className="p-4 text-sm text-gray-700 font-mono border-r border-gray-100">{item.lemma || '-'}</div>
+                                    <div className="p-4 text-sm">
+                                      <select
+                                        value={item.partOfSpeech?.toLowerCase() || 'unknown'}
+                                        onChange={async (e) => {
+                                          const newPos = e.target.value;
+                                          try {
+                                            await updateAlignedWordPair(item.id, { partOfSpeech: newPos });
+                                            const updatedAligned = [...aligned];
+                                            updatedAligned[idx] = { ...item, partOfSpeech: newPos };
+                                            setDoc({ ...doc, alignedWordPairs: updatedAligned } as any);
+                                          } catch (err) {
+                                            alert('更新词性失败');
+                                          }
+                                        }}
+                                        className="bg-transparent border-0 text-xs font-medium uppercase text-purple-600 focus:ring-0 cursor-pointer hover:bg-purple-50 rounded px-1"
+                                      >
+                                        {posOptions.map(opt => (
+                                          <option key={opt} value={opt}>{opt}</option>
+                                        ))}
+                                      </select>
+                                    </div>
                                   </div>
                                 ));
                               }
 
-                              // 兼容旧数据：回退到按行解析（无 lemma）
+                              // 兼容旧数据
                               const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
                               const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
                               const words = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
@@ -971,10 +1026,12 @@ export default function DocumentDetailPage() {
                               if (words.length === 0) return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到单词对照</div>;
 
                               return words.map((item, idx) => (
-                                <div key={idx} className="grid grid-cols-3 gap-0 hover:bg-gray-50 transition-colors">
+                                <div key={idx} className="grid grid-cols-5 gap-0 hover:bg-gray-50 transition-colors items-center">
+                                  <div className="p-4 text-center text-gray-300">-</div>
                                   <div className="p-4 text-sm text-gray-800 border-r border-gray-100">{item.zh}</div>
                                   <div className="p-4 text-sm text-gray-900 font-bold border-r border-gray-100">{item.en}</div>
-                                  <div className="p-4 text-sm text-gray-700 font-mono">-</div>
+                                  <div className="p-4 text-sm text-gray-700 font-mono border-r border-gray-100">-</div>
+                                  <div className="p-4 text-sm text-gray-400 italic">-</div>
                                 </div>
                               ));
                             })()}

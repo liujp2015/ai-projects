@@ -19,21 +19,23 @@ export default function ReviewCardsPage() {
   const [showTranslation, setShowTranslation] = useState(false);
   const [grading, setGrading] = useState(false);
   const [playingText, setPlayingText] = useState<string | null>(null);
+  const [partOfSpeechFilter, setPartOfSpeechFilter] = useState<string>('all'); // all / noun / verb / adjective / adverb / unknown
+  const [reviewMode, setReviewMode] = useState<'due' | 'all'>('due'); // due: 仅到期, all: 全部学习中
 
   const loadCards = useCallback(async () => {
     if (!id) return;
     try {
       setLoading(true);
-      const data = await fetchDueReviewCards(id as string);
+      const data = await fetchDueReviewCards(id as string, 50, partOfSpeechFilter, reviewMode);
       setCards(data);
       setCurrentIndex(0);
       setShowTranslation(false);
     } catch (err) {
-      console.error('Failed to load due cards', err);
+      console.error('Failed to load review cards', err);
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, partOfSpeechFilter, reviewMode]);
 
   useEffect(() => {
     loadCards();
@@ -192,31 +194,65 @@ export default function ReviewCardsPage() {
 
   if (cards.length === 0) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-zinc-50 p-6">
-        <div className="bg-white p-10 rounded-3xl shadow-sm border border-zinc-200 text-center max-w-md w-full">
-          <div className="w-20 h-20 bg-green-50 text-green-500 rounded-full flex items-center justify-center mx-auto mb-6">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="40"
-              height="40"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+      <div className="min-h-screen flex flex-col bg-zinc-50">
+        {/* 模式切换 */}
+        <div className="px-4 py-3 bg-white border-b border-zinc-200 flex flex-wrap gap-2 justify-center">
+          {[{ key: 'due', label: '仅到期' }, { key: 'all', label: '全部复习' }].map((m) => (
+            <button
+              key={m.key}
+              onClick={() => setReviewMode(m.key as 'due' | 'all')}
+              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                reviewMode === m.key
+                  ? 'bg-black text-white'
+                  : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+              }`}
             >
-              <path d="M20 6 9 17l-5-5" />
-            </svg>
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 词性筛选 */}
+        <div className="px-4 py-3 bg-white border-b border-zinc-200 flex flex-wrap gap-2 justify-center">
+          {[
+            { key: 'all', label: '全部' },
+            { key: 'noun', label: '名词' },
+            { key: 'verb', label: '动词' },
+            { key: 'adjective', label: '形容词' },
+            { key: 'adverb', label: '副词' },
+            { key: 'unknown', label: 'Unknown' },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setPartOfSpeechFilter(tab.key)}
+              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                partOfSpeechFilter === tab.key
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1 flex flex-col items-center justify-center p-6">
+          <div className="bg-white p-10 rounded-3xl shadow-sm border border-zinc-200 text-center max-w-md w-full">
+            <div className="w-20 h-20 bg-green-50 text-green-500 rounded-full flex items-center justify-center mx-auto mb-6">
+              <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold text-zinc-900 mb-2">复习完成！</h2>
+            <p className="text-zinc-500 mb-8">
+              {partOfSpeechFilter === 'all' ? '今日待复习内容已全部扫清。' : '当前词性分类下暂无待复习，可切换其他分类或返回文档。'}
+            </p>
+            <Link
+              href={`/documents/${id}`}
+              className="block w-full py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all"
+            >
+              返回文档
+            </Link>
           </div>
-          <h2 className="text-2xl font-bold text-zinc-900 mb-2">复习完成！</h2>
-          <p className="text-zinc-500 mb-8">今日待复习内容已全部扫清。</p>
-          <Link
-            href={`/documents/${id}`}
-            className="block w-full py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all"
-          >
-            返回文档
-          </Link>
         </div>
       </div>
     );
@@ -265,6 +301,47 @@ export default function ReviewCardsPage() {
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>
         </button>
       </header>
+
+      {/* 模式切换 */}
+      <div className="px-4 py-3 bg-white border-b border-zinc-100 flex flex-wrap gap-2 justify-center">
+        {[{ key: 'due', label: '仅到期' }, { key: 'all', label: '全部复习' }].map((m) => (
+          <button
+            key={m.key}
+            onClick={() => setReviewMode(m.key as 'due' | 'all')}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              reviewMode === m.key
+                ? 'bg-black text-white'
+                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 词性筛选 */}
+      <div className="px-4 py-3 bg-white border-b border-zinc-100 flex flex-wrap gap-2 justify-center">
+        {[
+          { key: 'all', label: '全部' },
+          { key: 'noun', label: '名词' },
+          { key: 'verb', label: '动词' },
+          { key: 'adjective', label: '形容词' },
+          { key: 'adverb', label: '副词' },
+          { key: 'unknown', label: 'Unknown' },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setPartOfSpeechFilter(tab.key)}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              partOfSpeechFilter === tab.key
+                ? 'bg-blue-600 text-white'
+                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
       {/* Progress Bar */}
       <div className="h-1.5 bg-zinc-200 w-full">

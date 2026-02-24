@@ -620,6 +620,8 @@ export class DocumentService {
   }
 
   async generateQuestions(documentId: string, force: boolean = false) {
+    this.logger.log(`[generateQuestions] Starting for document ${documentId}, force=${force}`);
+    
     const doc = await this.prisma.document.findUnique({
       where: { id: documentId },
       include: {
@@ -629,7 +631,12 @@ export class DocumentService {
       },
     });
 
-    if (!doc) throw new Error('Document not found');
+    if (!doc) {
+      this.logger.error(`[generateQuestions] Document not found: ${documentId}`);
+      throw new Error('Document not found');
+    }
+    
+    this.logger.log(`[generateQuestions] Document found: ${doc.title}, paragraphs: ${doc.paragraphs.length}`);
 
     if (force) {
       await this.prisma.exerciseQuestion.deleteMany({ where: { documentId } });
@@ -639,79 +646,124 @@ export class DocumentService {
     const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
     const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
     
+    this.logger.log(`[generateQuestions] Parsed ${zhLines.length} Chinese lines, ${enLines.length} English lines`);
+    
     // 简单的句子/单词分类逻辑（对应前端展示逻辑）
     const sentencePairs = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
       .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15));
     
     const wordPairs = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
       .filter(item => item.en && !(item.en.includes(' ') && item.en.length > 15));
+    
+    this.logger.log(`[generateQuestions] Found ${sentencePairs.length} sentence pairs, ${wordPairs.length} word pairs`);
 
-    // 2. 为没有题目的句子生成"选词造句"和"句子拼装"题
+    // 2. 为没有题目的句子生成题目（分批，避免频繁调用导致限流/超时）
     const sentences = doc.paragraphs.flatMap(p => p.sentences);
     let questionsCreated = 0;
+    let sentenceFailed = 0;
+
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    const batchSize = 5;
+    const totalBatches = Math.ceil(sentencePairs.length / batchSize);
     
-    for (const pair of sentencePairs) {
-      try {
-        // 寻找匹配的数据库句子
-        const matchedSent = sentences.find(s => 
-          this.normalizeForCompare(s.content).includes(this.normalizeForCompare(pair.en!)) || 
-          this.normalizeForCompare(pair.en!).includes(this.normalizeForCompare(s.content))
-        );
+    for (let idx = 0; idx < sentencePairs.length; idx += batchSize) {
+      const batch = sentencePairs.slice(idx, idx + batchSize);
+      const batchNum = Math.floor(idx / batchSize) + 1;
+      this.logger.log(`[generateQuestions] Processing batch ${batchNum}/${totalBatches} (${batch.length} sentences)`);
 
-        if (!matchedSent) continue;
+      for (const pair of batch) {
+        try {
+          // 寻找匹配的数据库句子
+          const matchedSent = sentences.find((s) =>
+            this
+              .normalizeForCompare(s.content)
+              .includes(this.normalizeForCompare(pair.en!)) ||
+            this
+              .normalizeForCompare(pair.en!)
+              .includes(this.normalizeForCompare(s.content)),
+          );
 
-        // 增量检查：如果该句子已经有了题目，且不是强制刷新模式，则跳过
-        if (!force) {
-          const hasQuestions = await this.prisma.exerciseQuestion.count({
-            where: { sentenceId: matchedSent.id }
+          if (!matchedSent) {
+            this.logger.warn(`[generateQuestions] No matched sentence for: ${pair.en?.substring(0, 50)}`);
+            continue;
+          }
+
+          // 增量检查：如果该句子已经有了题目，且不是强制刷新模式，则跳过
+          if (!force) {
+            const hasQuestions = await this.prisma.exerciseQuestion.count({
+              where: { sentenceId: matchedSent.id },
+            });
+            if (hasQuestions > 0) {
+              this.logger.debug(`[generateQuestions] Sentence already has questions, skipping`);
+              continue;
+            }
+          }
+
+          this.logger.debug(`[generateQuestions] Calling AI for sentence: ${pair.en?.substring(0, 50)}...`);
+          const aiRes = await this.aiService.generateAdvancedQuestions({
+            chinese_sentence: pair.zh,
+            chinese_words: [],
+            english_sentence: pair.en!,
+            english_words: [],
           });
-          if (hasQuestions > 0) continue;
-        }
 
-        const aiRes = await this.aiService.generateAdvancedQuestions({
-          chinese_sentence: pair.zh,
-          chinese_words: [],
-          english_sentence: pair.en!,
-          english_words: []
-        });
-
-        if (aiRes.sentence_completion) {
-          const sc = aiRes.sentence_completion;
-          await this.prisma.exerciseQuestion.create({
-            data: {
-              type: 'SENTENCE_COMPLETION',
-              promptZh: pair.zh,
-              answerEn: pair.en!,
-              blankedEn: sc.template,
-              structuredData: sc as any,
-              documentId,
-              sentenceId: matchedSent.id,
-            },
-          });
-
-          if (aiRes.sentence_scramble) {
-            const ss = aiRes.sentence_scramble;
-            const shuffledTokens: string[] = this.shuffleArray((ss.tokens || []) as string[]);
+          if (aiRes.sentence_completion) {
+            const sc = aiRes.sentence_completion;
             await this.prisma.exerciseQuestion.create({
               data: {
-                type: 'SCRAMBLE',
-                promptZh: ss.promptZh || pair.zh,
-                answerEn: ss.answerEn || pair.en!,
-                scrambledTokens: shuffledTokens,
+                type: 'SENTENCE_COMPLETION',
+                promptZh: pair.zh,
+                answerEn: pair.en!,
+                blankedEn: sc.template,
+                structuredData: sc as any,
                 documentId,
                 sentenceId: matchedSent.id,
               },
             });
+
+            if (aiRes.sentence_scramble) {
+              const ss = aiRes.sentence_scramble;
+              const shuffledTokens: string[] = this.shuffleArray(
+                (ss.tokens || []) as string[],
+              );
+              await this.prisma.exerciseQuestion.create({
+                data: {
+                  type: 'SCRAMBLE',
+                  promptZh: ss.promptZh || pair.zh,
+                  answerEn: ss.answerEn || pair.en!,
+                  scrambledTokens: shuffledTokens,
+                  documentId,
+                  sentenceId: matchedSent.id,
+                },
+              });
+            }
+            questionsCreated += 2;
+            this.logger.debug(`[generateQuestions] Created 2 questions for sentence`);
           }
-          questionsCreated += 2;
+        } catch (e: any) {
+          sentenceFailed++;
+          this.logger.error(
+            `[generateQuestions] Failed to generate sentence question: ${e.message}`,
+            e.stack,
+          );
         }
-      } catch (e) {
-        this.logger.error(`Failed to generate sentence question: ${e.message}`);
+        // 句子之间短暂停顿（减少到 100ms，避免限流但不过度等待）
+        await sleep(100);
       }
+      // 批次之间稍作停顿（减少到 300ms）
+      this.logger.log(`[generateQuestions] Batch ${batchNum} completed. Progress: ${questionsCreated} questions created, ${sentenceFailed} failed`);
+      await sleep(300);
     }
 
-    // 3. 为单词生成“单词选择”题
-    for (const pair of wordPairs) {
+    // 3. 为单词生成"单词选择"题
+    this.logger.log(`[generateQuestions] Processing ${wordPairs.length} word pairs`);
+    for (let i = 0; i < wordPairs.length; i++) {
+      const pair = wordPairs[i];
+      if ((i + 1) % 10 === 0) {
+        this.logger.log(`[generateQuestions] Word progress: ${i + 1}/${wordPairs.length}`);
+      }
+      
       try {
         // 单词题增量检查：如果该单词已经作为题目存在（根据 answerEn 判定），则跳过
         if (!force) {
@@ -751,12 +803,17 @@ export class DocumentService {
             }
           }
         }
-      } catch (e) {
-        this.logger.error(`Failed to generate word question: ${e.message}`);
+      } catch (e: any) {
+        this.logger.error(`[generateQuestions] Failed to generate word question: ${e.message}`);
+      }
+      // 单词之间也稍微停顿（但比句子短，因为单词题通常更快）
+      if (i < wordPairs.length - 1) {
+        await sleep(50);
       }
     }
 
-    return { total: questionsCreated, generated: questionsCreated };
+    this.logger.log(`[generateQuestions] Completed: created=${questionsCreated}, failed=${sentenceFailed}`);
+    return { total: questionsCreated, generated: questionsCreated, failed: sentenceFailed };
   }
 
   async getQuestions(documentId: string, limit: number = 20) {
@@ -900,8 +957,9 @@ export class DocumentService {
 
       this.logger.log(`Extracting words from ${sentences.length} core sentences in document ${documentId}`);
 
-      // 分批处理，每批最多 50 个句子，避免 API 调用过大
-      const batchSize = 50;
+      // 分批处理：每批句子过多会导致 AI 返回 JSON 过长被截断，从而解析失败
+      // 这里缩小 batchSize 提升稳定性
+      const batchSize = 15;
       const batches: string[][] = [];
       for (let i = 0; i < sentences.length; i += batchSize) {
         batches.push(sentences.slice(i, i + batchSize));
@@ -1114,12 +1172,56 @@ export class DocumentService {
       }
     }
 
-    this.logger.log(`Backfill completed. Total updated: ${totalUpdated}`);
-    return { 
-      total: totalUpdated, 
-      message: totalUpdated > 0 
-        ? `成功同步并补全了 ${totalUpdated} 个单词的原形。` 
-        : '同步完成，但未发现新的原形变更。' 
+    // 4. 从 ExtractedWord 同步词性到 AlignedWordPair（用于中英对照表显示和按词性刷词）
+    const extractedWithPos = await this.prisma.extractedWord.findMany({
+      where: { documentId },
+      select: { word: true, lemma: true, partOfSpeech: true },
+    });
+
+    const posByWord = new Map<string, string>();
+    const posByLemma = new Map<string, string>();
+    for (const ew of extractedWithPos) {
+      const w = ew.word.toLowerCase().trim();
+      if (!posByWord.has(w)) posByWord.set(w, ew.partOfSpeech);
+      if (ew.lemma) {
+        const l = ew.lemma.toLowerCase().trim();
+        if (!posByLemma.has(l)) posByLemma.set(l, ew.partOfSpeech);
+      }
+    }
+
+    const alignedToUpdate = await this.prisma.alignedWordPair.findMany({
+      where: { documentId, OR: [{ partOfSpeech: null }, { partOfSpeech: '' }] },
+      select: { id: true, en: true, lemma: true },
+    });
+
+    let posUpdated = 0;
+    for (const pair of alignedToUpdate) {
+      const enLower = pair.en.toLowerCase().trim();
+      const pos = posByWord.get(enLower) ?? (pair.lemma ? posByLemma.get(pair.lemma.toLowerCase().trim()) : null);
+      if (pos) {
+        await this.prisma.alignedWordPair.update({
+          where: { id: pair.id },
+          data: { partOfSpeech: pos },
+        });
+        posUpdated++;
+      }
+    }
+
+    this.logger.log(`Backfill completed. Lemma updated: ${totalUpdated}, PartOfSpeech synced: ${posUpdated}`);
+    return {
+      total: totalUpdated,
+      posSynced: posUpdated,
+      message:
+        totalUpdated > 0 || posUpdated > 0
+          ? `成功同步：原形 ${totalUpdated} 个，词性 ${posUpdated} 个。`
+          : '同步完成，但未发现新的原形或词性变更。',
     };
+  }
+
+  async updateWordPair(pairId: string, data: { isImportant?: boolean; partOfSpeech?: string }) {
+    return this.prisma.alignedWordPair.update({
+      where: { id: pairId },
+      data,
+    });
   }
 }

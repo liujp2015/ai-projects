@@ -29,6 +29,15 @@
 - **已完成任务**:
     - ✅ 在词汇对照表中添加"Lemma"列，显示单词的原形。
     - ✅ 优先使用后端返回的 `alignedWordPairs` 数据（包含 lemma），兼容旧数据格式。
+    - ✅ 在词汇对照表中添加"词性"列，显示 noun/verb/adjective/adverb（名词/动词/形容词/副词）。
+    - ✅ 导入或同步时自动将 ExtractedWord 的词性同步到 AlignedWordPair，用于刷词时按词性筛选。
+
+## ✅ 5. 词性分类逻辑说明
+- **词性来源**：词性来自「提取词性」功能，由 AI 从句子中提取。
+- **分类依据**：按**单词在句子中的用法**分类，而非词典原形词性。
+  - 例如："developing" 在 "developing countries" 中可能标为形容词（adjective），在 "I am developing" 中可能标为动词（verb）。
+  - 同一单词在不同句子中可能被标为不同词性，取决于其在该句中的语法角色。
+- **数据流**：提取词性 → ExtractedWord → 导入 → 同步到 AlignedWordPair → 词汇对照表显示 + 刷词按词性筛选。
 
 ## 📋 功能闭环验证建议
 - 建议测试以下场景：

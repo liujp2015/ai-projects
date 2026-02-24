@@ -53,6 +53,8 @@ export type DocumentItem = {
     en: string;
     zh: string;
     lemma?: string | null;
+    partOfSpeech?: string | null;
+    isImportant?: boolean;
     orderIndex: number;
   }>;
 };
@@ -330,12 +332,21 @@ export type ExerciseQuestion = {
   structuredData?: any; // 用于存储 SENTENCE_COMPLETION 和 WORD_MATCHING 的详细结构
 };
 
-export async function generateQuestionBank(id: string, force: boolean = false): Promise<{ total: number; generated: number }> {
+export async function generateQuestionBank(id: string, force: boolean = false): Promise<{ total: number; generated: number; failed?: number }> {
   const res = await apiFetch(`/api/documents/${id}/questions/generate`, {
     method: 'POST',
     body: JSON.stringify({ force }),
   });
-  if (!res.ok) throw new Error(`Failed to generate question bank: ${res.status}`);
+  if (!res.ok) {
+    let errorMessage = `Failed to generate question bank: ${res.status}`;
+    try {
+      const errorData = await res.json();
+      errorMessage = errorData.message || errorMessage;
+    } catch {
+      // If response is not JSON, use default message
+    }
+    throw new Error(errorMessage);
+  }
   return res.json();
 }
 
@@ -521,7 +532,7 @@ export type ReviewCard = {
   updatedAt: string;
 };
 
-export async function importReviewCards(documentId: string): Promise<{ total: number; inserted: number; updated: number; skipped: number; message?: string }> {
+export async function importReviewCards(documentId: string): Promise<{ total: number; inserted: number; updated: number; skipped: number; posSynced?: number; message?: string }> {
   const res = await apiFetch(`/api/review/import/${documentId}`, {
     method: 'POST',
   });
@@ -535,9 +546,27 @@ export async function fetchReviewSummary(documentId: string): Promise<{ dueCount
   return res.json();
 }
 
-export async function fetchDueReviewCards(documentId: string, limit: number = 50): Promise<ReviewCard[]> {
-  const res = await apiFetch(`/api/review/due?documentId=${encodeURIComponent(documentId)}&limit=${limit}`, { cache: 'no-store' });
+export async function fetchDueReviewCards(
+  documentId: string,
+  limit: number = 50,
+  partOfSpeech?: string,
+  mode: 'due' | 'all' = 'due',
+): Promise<ReviewCard[]> {
+  const params = new URLSearchParams({ documentId, limit: String(limit), mode });
+  if (partOfSpeech && partOfSpeech !== 'all') {
+    params.set('partOfSpeech', partOfSpeech);
+  }
+  const res = await apiFetch(`/api/review/due?${params.toString()}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to fetch due review cards: ${res.status}`);
+  return res.json();
+}
+
+export async function updateAlignedWordPair(pairId: string, data: { isImportant?: boolean; partOfSpeech?: string | null }): Promise<any> {
+  const res = await apiFetch(`/api/documents/word-pair/${encodeURIComponent(pairId)}/update`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Failed to update word pair: ${res.status}`);
   return res.json();
 }
 

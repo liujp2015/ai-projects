@@ -385,7 +385,7 @@ let OCRService = OCRService_1 = class OCRService {
                 for (let i = 0; i < z.length; i++) {
                     const zh = z[i] || '';
                     const en = e[i] || '';
-                    if (/^[A-Za-z0-9\s.,!?'"-]+$/.test(zh)) {
+                    if (/^[A-Za-z0-9\s.,!?'"-]+$/.test(zh) && zh.trim().toLowerCase() !== en.trim().toLowerCase()) {
                         throw new Error(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
                     }
                     if (this.containsIpaLike(zh)) {
@@ -655,7 +655,8 @@ ${newEnglishLines.map((line, i) => `[${i + 1}] ${line}`).join('\n')}
                 for (let i = 0; i < z.length; i++) {
                     const zh = z[i] || '';
                     const en = e[i] || '';
-                    if (/^[A-Za-z0-9\s.,!?"'\-()\[\]{}:;\/\\]+$/.test(zh)) {
+                    if (/^[A-Za-z0-9\s.,!?"'\-()\[\]{}:;\/\\]+$/.test(zh) &&
+                        zh.trim().toLowerCase() !== en.trim().toLowerCase()) {
                         throw new Error(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
                     }
                     if (this.containsIpaLike(zh)) {

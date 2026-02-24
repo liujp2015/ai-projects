@@ -23,8 +23,8 @@ let ReviewController = class ReviewController {
     async import(documentId) {
         return this.reviewService.importFromExtractedWords(documentId);
     }
-    async due(documentId, limit) {
-        return this.reviewService.getDueCards(documentId, limit ?? 50);
+    async due(documentId, limit, partOfSpeech, mode) {
+        return this.reviewService.getDueCards(documentId, limit ?? 50, partOfSpeech, mode ?? 'due');
     }
     async grade(cardId, body) {
         return this.reviewService.gradeCard(cardId, body.result);
@@ -45,8 +45,10 @@ __decorate([
     (0, common_1.Get)('due'),
     __param(0, (0, common_1.Query)('documentId')),
     __param(1, (0, common_1.Query)('limit', new common_1.ParseIntPipe({ optional: true }))),
+    __param(2, (0, common_1.Query)('partOfSpeech')),
+    __param(3, (0, common_1.Query)('mode')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, Number]),
+    __metadata("design:paramtypes", [String, Number, String, String]),
     __metadata("design:returntype", Promise)
 ], ReviewController.prototype, "due", null);
 __decorate([

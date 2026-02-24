@@ -482,8 +482,9 @@ export class OCRService {
           const zh = z[i] || '';
           const en = e[i] || '';
 
-          // 允许中文翻译中包含少量英文（如专有名词），但不允许全是英文或包含音标
-          if (/^[A-Za-z0-9\s.,!?'"-]+$/.test(zh)) {
+          // 允许中文翻译中包含少量英文（如专有名词），也允许 zh==en 的“单词表/代码关键字”场景；
+          // 仅当 zh 全是英文且与 en 不同，才判定为异常（通常是 OCR 把中文列识别成英文列）
+          if (/^[A-Za-z0-9\s.,!?'"-]+$/.test(zh) && zh.trim().toLowerCase() !== en.trim().toLowerCase()) {
             throw new Error(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
           }
           if (this.containsIpaLike(zh)) {
@@ -819,8 +820,11 @@ ${newEnglishLines.map((line, i) => `[${i + 1}] ${line}`).join('\n')}
           const en = e[i] || '';
 
           // 追加图片时，中文段落里可能会自然包含少量英文（如 getter/setter、API、专有名词）。
-          // 因此这里不再做“包含任意英文就失败”的强校验，只禁止“几乎全是英文”的情况。
-          if (/^[A-Za-z0-9\s.,!?"'\-()\[\]{}:;\/\\]+$/.test(zh)) {
+          // 也允许 zh==en 的“单词表/代码关键字”场景；仅当 zh 全是英文且与 en 不同，才判定为异常。
+          if (
+            /^[A-Za-z0-9\s.,!?"'\-()\[\]{}:;\/\\]+$/.test(zh) &&
+            zh.trim().toLowerCase() !== en.trim().toLowerCase()
+          ) {
             throw new Error(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
           }
           if (this.containsIpaLike(zh)) {

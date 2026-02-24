@@ -45,11 +45,13 @@ model AlignedSentencePair {
 }
 
 model AlignedWordPair {
-  id         String  @id @default(uuid())
-  orderIndex Int
-  en         String  @db.Text
-  zh         String  @db.Text
-  lemma      String? @db.Text
+  id            String  @id @default(uuid())
+  orderIndex    Int
+  en            String  @db.Text
+  zh            String  @db.Text
+  lemma         String? @db.Text
+  partOfSpeech  String? @db.Text // 词性：noun, verb, adjective, adverb 等（用于按词性刷词）
+  isImportant   Boolean @default(false) // 是否为重点单词
 
   documentId String
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)

@@ -54,15 +54,46 @@ export class ReviewService {
       word: ew.word,
       partOfSpeech: ew.partOfSpeech,
       translation: ew.translation,
-      sentence: ew.sentence,
+      sentence: ew.sentence as string | null,
       stage: 0,
       nextReviewAt: now,
       status: ReviewCardStatus.LEARNING,
     }));
 
-    const insertedCandidates = rows.filter(
+    const insertedCandidates: any[] = rows.filter(
       (r) => !existingKey.has(`${r.word.toLowerCase()}@@${r.partOfSpeech.toLowerCase()}`),
     );
+
+    // 4. 额外导入用户手动标记为“重点”的单词 (AlignedWordPair.isImportant = true)
+    const importantPairs = await this.prisma.alignedWordPair.findMany({
+      where: {
+        documentId,
+        isImportant: true,
+      },
+    });
+
+    for (const pair of importantPairs) {
+      const pos = (pair.partOfSpeech || 'unknown').toLowerCase();
+      const key = `${pair.en.toLowerCase()}@@${pos}`;
+      
+      // 如果这个重点词还没在导入队列里，且复习库里也没有，则添加
+      const alreadyInCandidates = insertedCandidates.some(c => 
+        c.word.toLowerCase() === pair.en.toLowerCase() && c.partOfSpeech.toLowerCase() === pos
+      );
+
+      if (!existingKey.has(key) && !alreadyInCandidates) {
+        insertedCandidates.push({
+          documentId,
+          word: pair.en,
+          partOfSpeech: pos,
+          translation: pair.zh,
+          sentence: null as string | null, // 重点词可能没有例句
+          stage: 0,
+          nextReviewAt: now,
+          status: ReviewCardStatus.LEARNING,
+        });
+      }
+    }
 
     // 只对“新 key”做插入，避免把已复习过的卡重置 stage
     const createRes = await this.prisma.reviewCard.createMany({
@@ -96,25 +127,70 @@ export class ReviewService {
     const inserted = createRes.count;
     const skipped = extractedWords.length - inserted;
 
+    // 5. 同步词性到 AlignedWordPair（用于中英对照表显示和按词性刷词）
+    const posByWord = new Map<string, string>();
+    const posByLemma = new Map<string, string>();
+    for (const ew of extractedWords) {
+      const w = ew.word.toLowerCase().trim();
+      if (!posByWord.has(w)) posByWord.set(w, ew.partOfSpeech);
+      if (ew.lemma) {
+        const l = ew.lemma.toLowerCase().trim();
+        if (!posByLemma.has(l)) posByLemma.set(l, ew.partOfSpeech);
+      }
+    }
+
+    // 获取所有 AlignedWordPair，优先更新空词性的，有词性的也允许用 ExtractedWord 覆盖（保持与提取结果一致）
+    const allAligned = await this.prisma.alignedWordPair.findMany({
+      where: { documentId },
+      select: { id: true, en: true, lemma: true, partOfSpeech: true },
+    });
+
+    let posSynced = 0;
+    for (const pair of allAligned) {
+      const enLower = pair.en.toLowerCase().trim();
+      const pos = posByWord.get(enLower) ?? (pair.lemma ? posByLemma.get(pair.lemma.toLowerCase().trim()) : null);
+      if (pos) {
+        await this.prisma.alignedWordPair.update({
+          where: { id: pair.id },
+          data: { partOfSpeech: pos },
+        });
+        posSynced++;
+      }
+    }
+
     return {
       total: extractedWords.length,
       inserted,
       updated,
       skipped,
+      posSynced,
     };
   }
 
   /**
-   * 获取今日待复习的卡片
+   * 获取复习卡片队列
+   * @param mode due: 仅到期, all: 全部学习中
    */
-  async getDueCards(documentId: string, limit: number = 50) {
+  async getDueCards(documentId: string, limit: number = 50, partOfSpeech?: string, mode: 'due' | 'all' = 'due') {
+    const where: any = {
+      documentId,
+      status: ReviewCardStatus.LEARNING,
+    };
+
+    if (mode === 'due') {
+      where.nextReviewAt = { lte: new Date() };
+    }
+
+    if (partOfSpeech && partOfSpeech !== 'all') {
+      where.partOfSpeech = { equals: partOfSpeech.toLowerCase(), mode: 'insensitive' };
+    }
+
     return this.prisma.reviewCard.findMany({
-      where: {
-        documentId,
-        nextReviewAt: { lte: new Date() },
-        status: ReviewCardStatus.LEARNING,
-      },
-      orderBy: { nextReviewAt: 'asc' },
+      where,
+      orderBy: [
+        { nextReviewAt: 'asc' }, // 到期的排前面
+        { createdAt: 'asc' }
+      ],
       take: limit,
     });
   }

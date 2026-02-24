@@ -54,6 +54,29 @@ let ReviewService = class ReviewService {
             status: client_1.ReviewCardStatus.LEARNING,
         }));
         const insertedCandidates = rows.filter((r) => !existingKey.has(`${r.word.toLowerCase()}@@${r.partOfSpeech.toLowerCase()}`));
+        const importantPairs = await this.prisma.alignedWordPair.findMany({
+            where: {
+                documentId,
+                isImportant: true,
+            },
+        });
+        for (const pair of importantPairs) {
+            const pos = (pair.partOfSpeech || 'unknown').toLowerCase();
+            const key = `${pair.en.toLowerCase()}@@${pos}`;
+            const alreadyInCandidates = insertedCandidates.some(c => c.word.toLowerCase() === pair.en.toLowerCase() && c.partOfSpeech.toLowerCase() === pos);
+            if (!existingKey.has(key) && !alreadyInCandidates) {
+                insertedCandidates.push({
+                    documentId,
+                    word: pair.en,
+                    partOfSpeech: pos,
+                    translation: pair.zh,
+                    sentence: null,
+                    stage: 0,
+                    nextReviewAt: now,
+                    status: client_1.ReviewCardStatus.LEARNING,
+                });
+            }
+        }
         const createRes = await this.prisma.reviewCard.createMany({
             data: insertedCandidates,
             skipDuplicates: true,
@@ -80,21 +103,59 @@ let ReviewService = class ReviewService {
         }
         const inserted = createRes.count;
         const skipped = extractedWords.length - inserted;
+        const posByWord = new Map();
+        const posByLemma = new Map();
+        for (const ew of extractedWords) {
+            const w = ew.word.toLowerCase().trim();
+            if (!posByWord.has(w))
+                posByWord.set(w, ew.partOfSpeech);
+            if (ew.lemma) {
+                const l = ew.lemma.toLowerCase().trim();
+                if (!posByLemma.has(l))
+                    posByLemma.set(l, ew.partOfSpeech);
+            }
+        }
+        const allAligned = await this.prisma.alignedWordPair.findMany({
+            where: { documentId },
+            select: { id: true, en: true, lemma: true, partOfSpeech: true },
+        });
+        let posSynced = 0;
+        for (const pair of allAligned) {
+            const enLower = pair.en.toLowerCase().trim();
+            const pos = posByWord.get(enLower) ?? (pair.lemma ? posByLemma.get(pair.lemma.toLowerCase().trim()) : null);
+            if (pos) {
+                await this.prisma.alignedWordPair.update({
+                    where: { id: pair.id },
+                    data: { partOfSpeech: pos },
+                });
+                posSynced++;
+            }
+        }
         return {
             total: extractedWords.length,
             inserted,
             updated,
             skipped,
+            posSynced,
         };
     }
-    async getDueCards(documentId, limit = 50) {
+    async getDueCards(documentId, limit = 50, partOfSpeech, mode = 'due') {
+        const where = {
+            documentId,
+            status: client_1.ReviewCardStatus.LEARNING,
+        };
+        if (mode === 'due') {
+            where.nextReviewAt = { lte: new Date() };
+        }
+        if (partOfSpeech && partOfSpeech !== 'all') {
+            where.partOfSpeech = { equals: partOfSpeech.toLowerCase(), mode: 'insensitive' };
+        }
         return this.prisma.reviewCard.findMany({
-            where: {
-                documentId,
-                nextReviewAt: { lte: new Date() },
-                status: client_1.ReviewCardStatus.LEARNING,
-            },
-            orderBy: { nextReviewAt: 'asc' },
+            where,
+            orderBy: [
+                { nextReviewAt: 'asc' },
+                { createdAt: 'asc' }
+            ],
             take: limit,
         });
     }

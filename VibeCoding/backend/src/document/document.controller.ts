@@ -8,12 +8,15 @@ import {
   UploadedFiles,
   Body,
   Query,
+  Logger,
 } from '@nestjs/common';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { DocumentService } from './document.service';
 
 @Controller('documents')
 export class DocumentController {
+  private readonly logger = new Logger(DocumentController.name);
+  
   constructor(private readonly documentService: DocumentService) {}
 
   @Post('upload')
@@ -72,7 +75,15 @@ export class DocumentController {
     @Param('id') id: string,
     @Body('force') force?: boolean,
   ) {
-    return this.documentService.generateQuestions(id, force);
+    this.logger.log(`[generateQuestions] Starting for document ${id}, force=${force}`);
+    try {
+      const result = await this.documentService.generateQuestions(id, force);
+      this.logger.log(`[generateQuestions] Success for document ${id}: ${JSON.stringify(result)}`);
+      return result;
+    } catch (error: any) {
+      this.logger.error(`[generateQuestions] Failed for document ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post(':id/append-text')
@@ -141,6 +152,15 @@ export class DocumentController {
   @Post(':id/lemmas/backfill')
   async backfillLemmas(@Param('id') id: string) {
     return this.documentService.backfillLemmas(id);
+  }
+
+  @Post('word-pair/:pairId/update')
+  async updateWordPair(
+    @Param('pairId') pairId: string,
+    @Body() data: { isImportant?: boolean; partOfSpeech?: string },
+  ) {
+    console.log(`[DocumentController] Updating word pair ${pairId}:`, data);
+    return this.documentService.updateWordPair(pairId, data);
   }
 }
 

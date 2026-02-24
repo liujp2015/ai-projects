@@ -26,14 +26,16 @@ export class ReviewController {
   }
 
   /**
-   * 获取到期需要复习的卡片
+   * 获取到期需要复习的卡片（可选按词性筛选：noun, verb, adjective, adverb）
    */
   @Get('due')
   async due(
     @Query('documentId') documentId: string,
     @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('partOfSpeech') partOfSpeech?: string,
+    @Query('mode') mode?: 'due' | 'all',
   ) {
-    return this.reviewService.getDueCards(documentId, limit ?? 50);
+    return this.reviewService.getDueCards(documentId, limit ?? 50, partOfSpeech, mode ?? 'due');
   }
 
   /**

@@ -54,6 +54,7 @@ let DocumentService = DocumentService_1 = class DocumentService {
     ocrService;
     aiService;
     logger = new common_1.Logger(DocumentService_1.name);
+    generatingQuestionDocs = new Set();
     constructor(prisma, ocrService, aiService) {
         this.prisma = prisma;
         this.ocrService = ocrService;
@@ -104,6 +105,7 @@ let DocumentService = DocumentService_1 = class DocumentService {
         const chineseTexts = [];
         const englishTexts = [];
         const allWordPairs = [];
+        const allValidationIssues = [];
         for (const file of files) {
             const mimeType = file.mimetype;
             if (!mimeType.startsWith('image/')) {
@@ -116,16 +118,19 @@ let DocumentService = DocumentService_1 = class DocumentService {
             if (ocrResult.wordPairs) {
                 allWordPairs.push(...ocrResult.wordPairs);
             }
+            if (ocrResult.validationIssues?.length) {
+                allValidationIssues.push(...ocrResult.validationIssues.map((issue) => `[${file.originalname}] ${issue}`));
+            }
         }
         const mergedOriginal = originalTexts.join('\n\n');
         const mergedChinese = chineseTexts.filter((t) => t.trim()).join('\n');
         const mergedEnglish = englishTexts.filter((t) => t.trim()).join('\n');
-        return this.saveStructuredContentWithOCR(mergedOriginal, mergedChinese, mergedEnglish, title, `${title}.images`, files.reduce((sum, f) => sum + f.size, 0), 'image/*', allWordPairs);
+        return this.saveStructuredContentWithOCR(mergedOriginal, mergedChinese, mergedEnglish, title, `${title}.images`, files.reduce((sum, f) => sum + f.size, 0), 'image/*', allWordPairs, allValidationIssues);
     }
     async saveRawText(content, title) {
         return this.saveStructuredContent(content, title, 'manual-input.txt', Buffer.byteLength(content), 'text/plain');
     }
-    async saveStructuredContentWithOCR(originalText, chineseText, englishText, title, filename, fileSize, mimeType, wordPairs = []) {
+    async saveStructuredContentWithOCR(originalText, chineseText, englishText, title, filename, fileSize, mimeType, wordPairs = [], validationIssues = []) {
         const document = await this.prisma.document.create({
             data: {
                 title: title,
@@ -137,6 +142,14 @@ let DocumentService = DocumentService_1 = class DocumentService {
                 englishText: englishText,
             },
         });
+        if (validationIssues.length > 0) {
+            try {
+                await this.prisma.$executeRawUnsafe(`UPDATE "Document" SET "hasOcrValidationIssues" = $1, "ocrValidationIssues" = $2 WHERE "id" = $3`, true, validationIssues.join('\n'), document.id);
+            }
+            catch (e) {
+                this.logger.warn(`Skip saving OCR validation flags (column may not exist yet): ${e.message}`);
+            }
+        }
         if (wordPairs.length > 0) {
             await this.prisma.alignedWordPair.createMany({
                 data: wordPairs.map((p, i) => ({
@@ -511,161 +524,144 @@ let DocumentService = DocumentService_1 = class DocumentService {
     }
     async generateQuestions(documentId, force = false) {
         this.logger.log(`[generateQuestions] Starting for document ${documentId}, force=${force}`);
-        const doc = await this.prisma.document.findUnique({
-            where: { id: documentId },
-            include: {
-                paragraphs: {
-                    include: { sentences: true },
+        if (this.generatingQuestionDocs.has(documentId)) {
+            this.logger.warn(`[generateQuestions] Already running for document ${documentId}, reject duplicate request`);
+            throw new Error('题库正在生成中，请稍后再试');
+        }
+        this.generatingQuestionDocs.add(documentId);
+        try {
+            const doc = await this.prisma.document.findUnique({
+                where: { id: documentId },
+                include: {
+                    paragraphs: {
+                        include: { sentences: true },
+                    },
                 },
-            },
-        });
-        if (!doc) {
-            this.logger.error(`[generateQuestions] Document not found: ${documentId}`);
-            throw new Error('Document not found');
-        }
-        this.logger.log(`[generateQuestions] Document found: ${doc.title}, paragraphs: ${doc.paragraphs.length}`);
-        if (force) {
-            await this.prisma.exerciseQuestion.deleteMany({ where: { documentId } });
-        }
-        const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-        const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-        this.logger.log(`[generateQuestions] Parsed ${zhLines.length} Chinese lines, ${enLines.length} English lines`);
-        const sentencePairs = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
-            .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15));
-        const wordPairs = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
-            .filter(item => item.en && !(item.en.includes(' ') && item.en.length > 15));
-        this.logger.log(`[generateQuestions] Found ${sentencePairs.length} sentence pairs, ${wordPairs.length} word pairs`);
-        const sentences = doc.paragraphs.flatMap(p => p.sentences);
-        let questionsCreated = 0;
-        let sentenceFailed = 0;
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        const batchSize = 5;
-        const totalBatches = Math.ceil(sentencePairs.length / batchSize);
-        for (let idx = 0; idx < sentencePairs.length; idx += batchSize) {
-            const batch = sentencePairs.slice(idx, idx + batchSize);
-            const batchNum = Math.floor(idx / batchSize) + 1;
-            this.logger.log(`[generateQuestions] Processing batch ${batchNum}/${totalBatches} (${batch.length} sentences)`);
-            for (const pair of batch) {
-                try {
-                    const matchedSent = sentences.find((s) => this
-                        .normalizeForCompare(s.content)
-                        .includes(this.normalizeForCompare(pair.en)) ||
-                        this
-                            .normalizeForCompare(pair.en)
-                            .includes(this.normalizeForCompare(s.content)));
-                    if (!matchedSent) {
-                        this.logger.warn(`[generateQuestions] No matched sentence for: ${pair.en?.substring(0, 50)}`);
-                        continue;
-                    }
-                    if (!force) {
-                        const hasQuestions = await this.prisma.exerciseQuestion.count({
-                            where: { sentenceId: matchedSent.id },
-                        });
-                        if (hasQuestions > 0) {
-                            this.logger.debug(`[generateQuestions] Sentence already has questions, skipping`);
-                            continue;
+            });
+            if (!doc) {
+                this.logger.error(`[generateQuestions] Document not found: ${documentId}`);
+                throw new Error('Document not found');
+            }
+            this.logger.log(`[generateQuestions] Document found: ${doc.title}, paragraphs: ${doc.paragraphs.length}`);
+            if (force) {
+                await this.prisma.exerciseQuestion.deleteMany({ where: { documentId } });
+            }
+            const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            this.logger.log(`[generateQuestions] Parsed ${zhLines.length} Chinese lines, ${enLines.length} English lines`);
+            const invalidLineIndexes = new Set();
+            if (doc.ocrValidationIssues) {
+                const lines = doc.ocrValidationIssues.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+                for (const line of lines) {
+                    const m = line.match(/第\s*(\d+)\s*行/);
+                    if (m) {
+                        const oneBased = Number(m[1]);
+                        if (Number.isFinite(oneBased) && oneBased > 0) {
+                            invalidLineIndexes.add(oneBased - 1);
                         }
                     }
-                    this.logger.debug(`[generateQuestions] Calling AI for sentence: ${pair.en?.substring(0, 50)}...`);
-                    const aiRes = await this.aiService.generateAdvancedQuestions({
-                        chinese_sentence: pair.zh,
-                        chinese_words: [],
-                        english_sentence: pair.en,
-                        english_words: [],
-                    });
-                    if (aiRes.sentence_completion) {
-                        const sc = aiRes.sentence_completion;
-                        await this.prisma.exerciseQuestion.create({
-                            data: {
-                                type: 'SENTENCE_COMPLETION',
-                                promptZh: pair.zh,
-                                answerEn: pair.en,
-                                blankedEn: sc.template,
-                                structuredData: sc,
-                                documentId,
-                                sentenceId: matchedSent.id,
-                            },
+                }
+            }
+            const allPairs = zhLines
+                .map((zh, i) => ({ zh, en: enLines[i], index: i }))
+                .filter((item) => item.en);
+            const validPairs = allPairs.filter((item) => !invalidLineIndexes.has(item.index));
+            const sentencePairs = validPairs.filter((item) => item.en.includes(' ') && item.en.length > 15);
+            const wordPairs = validPairs.filter((item) => !(item.en.includes(' ') && item.en.length > 15));
+            this.logger.log(`[generateQuestions] Found ${sentencePairs.length} sentence pairs, ${wordPairs.length} word pairs (skipped invalid lines: ${invalidLineIndexes.size})`);
+            const sentences = doc.paragraphs.flatMap(p => p.sentences);
+            let questionsCreated = 0;
+            let sentenceFailed = 0;
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+            const batchSize = 5;
+            const totalBatches = Math.ceil(sentencePairs.length / batchSize);
+            for (let idx = 0; idx < sentencePairs.length; idx += batchSize) {
+                const batch = sentencePairs.slice(idx, idx + batchSize);
+                const batchNum = Math.floor(idx / batchSize) + 1;
+                this.logger.log(`[generateQuestions] Processing batch ${batchNum}/${totalBatches} (${batch.length} sentences)`);
+                for (const pair of batch) {
+                    try {
+                        const matchedSent = sentences.find((s) => this
+                            .normalizeForCompare(s.content)
+                            .includes(this.normalizeForCompare(pair.en)) ||
+                            this
+                                .normalizeForCompare(pair.en)
+                                .includes(this.normalizeForCompare(s.content)));
+                        if (!matchedSent) {
+                            this.logger.warn(`[generateQuestions] No matched sentence for: ${pair.en?.substring(0, 50)}`);
+                            continue;
+                        }
+                        if (!force) {
+                            const hasQuestions = await this.prisma.exerciseQuestion.count({
+                                where: { sentenceId: matchedSent.id },
+                            });
+                            if (hasQuestions > 0) {
+                                this.logger.debug(`[generateQuestions] Sentence already has questions, skipping`);
+                                continue;
+                            }
+                        }
+                        this.logger.debug(`[generateQuestions] Calling AI for sentence: ${pair.en?.substring(0, 50)}...`);
+                        const aiRes = await this.aiService.generateAdvancedQuestions({
+                            chinese_sentence: pair.zh,
+                            chinese_words: [],
+                            english_sentence: pair.en,
+                            english_words: [],
                         });
-                        if (aiRes.sentence_scramble) {
-                            const ss = aiRes.sentence_scramble;
-                            const shuffledTokens = this.shuffleArray((ss.tokens || []));
+                        if (aiRes.sentence_completion) {
+                            const sc = aiRes.sentence_completion;
                             await this.prisma.exerciseQuestion.create({
                                 data: {
-                                    type: 'SCRAMBLE',
-                                    promptZh: ss.promptZh || pair.zh,
-                                    answerEn: ss.answerEn || pair.en,
-                                    scrambledTokens: shuffledTokens,
+                                    type: 'SENTENCE_COMPLETION',
+                                    promptZh: pair.zh,
+                                    answerEn: pair.en,
+                                    blankedEn: sc.template,
+                                    structuredData: sc,
                                     documentId,
                                     sentenceId: matchedSent.id,
                                 },
                             });
-                        }
-                        questionsCreated += 2;
-                        this.logger.debug(`[generateQuestions] Created 2 questions for sentence`);
-                    }
-                }
-                catch (e) {
-                    sentenceFailed++;
-                    this.logger.error(`[generateQuestions] Failed to generate sentence question: ${e.message}`, e.stack);
-                }
-                await sleep(100);
-            }
-            this.logger.log(`[generateQuestions] Batch ${batchNum} completed. Progress: ${questionsCreated} questions created, ${sentenceFailed} failed`);
-            await sleep(300);
-        }
-        this.logger.log(`[generateQuestions] Processing ${wordPairs.length} word pairs`);
-        for (let i = 0; i < wordPairs.length; i++) {
-            const pair = wordPairs[i];
-            if ((i + 1) % 10 === 0) {
-                this.logger.log(`[generateQuestions] Word progress: ${i + 1}/${wordPairs.length}`);
-            }
-            try {
-                if (!force) {
-                    const hasWordQuestion = await this.prisma.exerciseQuestion.count({
-                        where: {
-                            documentId,
-                            type: 'WORD_MATCHING',
-                            answerEn: pair.en
-                        }
-                    });
-                    if (hasWordQuestion > 0)
-                        continue;
-                }
-                const aiRes = await this.aiService.generateAdvancedQuestions({
-                    chinese_sentence: '',
-                    chinese_words: [pair.zh],
-                    english_sentence: '',
-                    english_words: [pair.en]
-                });
-                if (Array.isArray(aiRes.word_matching)) {
-                    for (const wm of aiRes.word_matching) {
-                        const firstSentId = doc.paragraphs[0]?.sentences[0]?.id;
-                        if (firstSentId) {
-                            await this.prisma.exerciseQuestion.create({
-                                data: {
-                                    type: 'WORD_MATCHING',
-                                    promptZh: wm.chinese_meaning,
-                                    answerEn: wm.correct_word,
-                                    options: wm.options,
-                                    structuredData: wm,
-                                    documentId,
-                                    sentenceId: firstSentId,
-                                },
-                            });
-                            questionsCreated++;
+                            if (aiRes.sentence_scramble) {
+                                const ss = aiRes.sentence_scramble;
+                                const shuffledTokens = this.shuffleArray((ss.tokens || []));
+                                await this.prisma.exerciseQuestion.create({
+                                    data: {
+                                        type: 'SCRAMBLE',
+                                        promptZh: ss.promptZh || pair.zh,
+                                        answerEn: ss.answerEn || pair.en,
+                                        scrambledTokens: shuffledTokens,
+                                        documentId,
+                                        sentenceId: matchedSent.id,
+                                    },
+                                });
+                            }
+                            questionsCreated += 2;
+                            this.logger.debug(`[generateQuestions] Created 2 questions for sentence`);
                         }
                     }
+                    catch (e) {
+                        sentenceFailed++;
+                        this.logger.error(`[generateQuestions] Failed to generate sentence question: ${e.message}`, e.stack);
+                    }
+                    await sleep(100);
                 }
+                this.logger.log(`[generateQuestions] Batch ${batchNum} completed. Progress: ${questionsCreated} questions created, ${sentenceFailed} failed`);
+                await sleep(300);
             }
-            catch (e) {
-                this.logger.error(`[generateQuestions] Failed to generate word question: ${e.message}`);
+            const skippedWordPairs = wordPairs.length;
+            if (skippedWordPairs > 0) {
+                this.logger.log(`[generateQuestions] Skip WORD_MATCHING in this endpoint to avoid timeout. skipped=${skippedWordPairs}`);
             }
-            if (i < wordPairs.length - 1) {
-                await sleep(50);
-            }
+            this.logger.log(`[generateQuestions] Completed: created=${questionsCreated}, failed=${sentenceFailed}, skippedWordPairs=${skippedWordPairs}`);
+            return {
+                total: questionsCreated,
+                generated: questionsCreated,
+                failed: sentenceFailed,
+                skippedWordPairs,
+            };
         }
-        this.logger.log(`[generateQuestions] Completed: created=${questionsCreated}, failed=${sentenceFailed}`);
-        return { total: questionsCreated, generated: questionsCreated, failed: sentenceFailed };
+        finally {
+            this.generatingQuestionDocs.delete(documentId);
+        }
     }
     async getQuestions(documentId, limit = 20) {
         const questions = await this.prisma.exerciseQuestion.findMany({

@@ -17,6 +17,8 @@ model Document {
   originalText         String?               @db.Text // 千问 OCR 返回的原文
   chineseText          String?               @db.Text // 纯中文的句子和单词
   englishText          String?               @db.Text // 纯英文的句子和单词
+  hasOcrValidationIssues Boolean             @default(false) // 是否存在不满足识别条件的核心句子
+  ocrValidationIssues  String?               @db.Text // 不满足识别条件的明细（按行）
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
   paragraphs           Paragraph[]

@@ -381,31 +381,31 @@ let OCRService = OCRService_1 = class OCRService {
             if (zhLines.length !== enLines.length) {
                 throw new Error(`千问 OCR zhLines/enLines 长度不一致：zh=${zhLines.length}, en=${enLines.length}`);
             }
-            const validateOrThrow = (z, e) => {
+            const collectValidationIssues = (z, e) => {
+                const issues = [];
                 for (let i = 0; i < z.length; i++) {
                     const zh = z[i] || '';
                     const en = e[i] || '';
                     if (/^[A-Za-z0-9\s.,!?'"-]+$/.test(zh) && zh.trim().toLowerCase() !== en.trim().toLowerCase()) {
-                        throw new Error(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
+                        issues.push(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
                     }
                     if (this.containsIpaLike(zh)) {
-                        throw new Error(`第 ${i + 1} 行 zhLines 含音标/IPA：${zh}`);
+                        issues.push(`第 ${i + 1} 行 zhLines 含音标/IPA：${zh}`);
                     }
                     if (this.containsChinese(en)) {
-                        throw new Error(`第 ${i + 1} 行 enLines 含中文：${en}`);
+                        issues.push(`第 ${i + 1} 行 enLines 含中文：${en}`);
                     }
                     if (!this.isMostlyAsciiEnglish(en)) {
-                        throw new Error(`第 ${i + 1} 行 enLines 含非 ASCII 字符：${en}`);
+                        issues.push(`第 ${i + 1} 行 enLines 含非 ASCII 字符：${en}`);
                     }
                     if (this.containsIpaLike(en)) {
-                        throw new Error(`第 ${i + 1} 行 enLines 含音标/IPA：${en}`);
+                        issues.push(`第 ${i + 1} 行 enLines 含音标/IPA：${en}`);
                     }
                 }
+                return issues;
             };
-            try {
-                validateOrThrow(zhLines, enLines);
-            }
-            catch (e) {
+            const initialIssues = collectValidationIssues(zhLines, enLines);
+            if (initialIssues.length > 0) {
                 const retryCompletion = await client.chat.completions.create({
                     model: config.vlModel || 'qwen3-vl-flash',
                     messages: [
@@ -420,7 +420,7 @@ let OCRService = OCRService_1 = class OCRService {
                                 },
                                 {
                                     type: 'text',
-                                    text: this.buildRetryPrompt(this.getErrorMessage(e)),
+                                    text: this.buildRetryPrompt(initialIssues.join('\n')),
                                 },
                             ],
                         },
@@ -484,19 +484,24 @@ let OCRService = OCRService_1 = class OCRService {
                 if (zhLines2.length !== enLines2.length) {
                     throw new Error(`千问 OCR 重试 zhLines/enLines 长度不一致：zh=${zhLines2.length}, en=${enLines2.length}`);
                 }
-                validateOrThrow(zhLines2, enLines2);
+                const retryIssues = collectValidationIssues(zhLines2, enLines2);
                 return {
                     originalText: originalText2,
                     chineseText: zhLines2.join('\n'),
                     englishText: enLines2.join('\n'),
                     wordPairs: wordPairs2.map(p => ({ en: p.en, zh: p.zh, lemma: p.lemma })),
+                    hasValidationIssues: retryIssues.length > 0,
+                    validationIssues: retryIssues,
                 };
             }
+            const issues = collectValidationIssues(zhLines, enLines);
             const result = {
                 originalText,
                 chineseText: zhLines.join('\n'),
                 englishText: enLines.join('\n'),
                 wordPairs: wordPairs.map(p => ({ en: p.en, zh: p.zh, lemma: p.lemma })),
+                hasValidationIssues: issues.length > 0,
+                validationIssues: issues,
             };
             this.logger.log('=== 最终返回的数据 ===');
             this.logger.log(`originalText 长度: ${result.originalText.length}`);

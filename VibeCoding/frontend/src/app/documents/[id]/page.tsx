@@ -153,13 +153,16 @@ export default function DocumentDetailPage() {
     if (!id || generatingQuestions) return;
     
     // Check if we should force regeneration
-    const force = confirm('是否要覆盖现有题库并重新生成？\n\n如果发现题目与答案不匹配，请选择"确定"以应用最新的生成逻辑。');
+    const force = confirm('是否要覆盖现有句子题并重新生成？\n\n注意：该按钮只生成句子题；单词题请使用“生成单词测试题”。');
     
     try {
       setGeneratingQuestions(true);
       const res = await generateQuestionBank(id as string, force);
       const failedMsg = res.failed ? `，失败 ${res.failed} 个` : '';
-      alert(`题库生成成功！共处理了 ${res.total} 个句子，生成了 ${res.generated} 道题目${failedMsg}。`);
+      const skippedWordMsg = res.skippedWordPairs
+        ? `\n已跳过 ${res.skippedWordPairs} 条单词题（请点“生成单词测试题”单独生成）`
+        : '';
+      alert(`句子题库生成成功！共生成 ${res.generated} 道句子题${failedMsg}。${skippedWordMsg}`);
     } catch (err: any) {
       console.error('[handleGenerateQuestions] Error:', err);
       const errorMsg = err?.message || '未知错误';
@@ -223,7 +226,7 @@ export default function DocumentDetailPage() {
       setLoading(true);
       const questions = await fetchQuestionBank(id as string);
       if (questions.length === 0) {
-        alert('该文档尚未生成题库，请先点击“生成题库（DeepSeek）”按钮。');
+        alert('该文档尚未生成句子题，请先点击“生成句子题库”。单词题请点击“生成单词测试题”。');
         return;
       }
       setTestQuestions(questions);
@@ -632,6 +635,14 @@ export default function DocumentDetailPage() {
               <h1 className="text-base md:text-lg font-medium text-gray-900 truncate">
               {doc.title}
             </h1>
+              {doc.hasOcrValidationIssues && (
+                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 max-w-3xl">
+                  <div className="font-semibold">OCR 识别提示：存在不满足识别条件的核心句子，已照常保存。</div>
+                  {doc.ocrValidationIssues && (
+                    <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{doc.ocrValidationIssues}</div>
+                  )}
+                </div>
+              )}
               <div className="flex gap-4 mt-1">
                 <button 
                   onClick={() => setViewTab('read')}
@@ -799,14 +810,14 @@ export default function DocumentDetailPage() {
                         disabled={generatingQuestions}
                           className="px-3 md:px-6 py-2 bg-indigo-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-indigo-700 transition-all disabled:opacity-50"
                       >
-                          {generatingQuestions ? '...' : '生成题库'}
+                          {generatingQuestions ? '生成中...' : '生成句子题库'}
                       </button>
                       <button
                         onClick={handleGenerateWordQuiz}
                         disabled={generatingWordQuiz}
                           className="px-3 md:px-6 py-2 bg-purple-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-purple-700 transition-all disabled:opacity-50"
                       >
-                          {generatingWordQuiz ? '...' : '生成单词题'}
+                          {generatingWordQuiz ? '生成中...' : '生成单词测试题'}
                       </button>
                       <button
                         onClick={startTest}

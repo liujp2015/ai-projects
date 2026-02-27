@@ -46,6 +46,8 @@ export type DocumentItem = {
   originalText?: string | null;
   chineseText?: string | null;
   englishText?: string | null;
+  hasOcrValidationIssues?: boolean;
+  ocrValidationIssues?: string | null;
   createdAt: string;
   updatedAt: string;
   alignedWordPairs?: Array<{
@@ -332,7 +334,7 @@ export type ExerciseQuestion = {
   structuredData?: any; // 用于存储 SENTENCE_COMPLETION 和 WORD_MATCHING 的详细结构
 };
 
-export async function generateQuestionBank(id: string, force: boolean = false): Promise<{ total: number; generated: number; failed?: number }> {
+export async function generateQuestionBank(id: string, force: boolean = false): Promise<{ total: number; generated: number; failed?: number; skippedWordPairs?: number }> {
   const res = await apiFetch(`/api/documents/${id}/questions/generate`, {
     method: 'POST',
     body: JSON.stringify({ force }),

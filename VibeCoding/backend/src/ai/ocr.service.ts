@@ -215,6 +215,8 @@ export class OCRService {
     chineseText: string;
     englishText: string;
     wordPairs?: Array<{ en: string; zh: string; lemma?: string }>;
+    hasValidationIssues?: boolean;
+    validationIssues?: string[];
   }> {
     if (this.provider === OCRProvider.QWEN) {
       return this.qwenOCR(file.buffer);
@@ -267,6 +269,8 @@ export class OCRService {
     chineseText: string;
     englishText: string;
     wordPairs?: Array<{ en: string; zh: string; lemma?: string }>;
+    hasValidationIssues?: boolean;
+    validationIssues?: string[];
   }> {
     const config = getQwenConfig();
 
@@ -476,7 +480,8 @@ export class OCRService {
         );
       }
 
-      const validateOrThrow = (z: string[], e: string[]) => {
+      const collectValidationIssues = (z: string[], e: string[]): string[] => {
+        const issues: string[] = [];
         // 只检查内容纯度，不检查完整性（originalText 可能包含音标、注释等，不需要全部提取）
         for (let i = 0; i < z.length; i++) {
           const zh = z[i] || '';
@@ -485,26 +490,26 @@ export class OCRService {
           // 允许中文翻译中包含少量英文（如专有名词），也允许 zh==en 的“单词表/代码关键字”场景；
           // 仅当 zh 全是英文且与 en 不同，才判定为异常（通常是 OCR 把中文列识别成英文列）
           if (/^[A-Za-z0-9\s.,!?'"-]+$/.test(zh) && zh.trim().toLowerCase() !== en.trim().toLowerCase()) {
-            throw new Error(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
+            issues.push(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
           }
           if (this.containsIpaLike(zh)) {
-            throw new Error(`第 ${i + 1} 行 zhLines 含音标/IPA：${zh}`);
+            issues.push(`第 ${i + 1} 行 zhLines 含音标/IPA：${zh}`);
           }
           if (this.containsChinese(en)) {
-            throw new Error(`第 ${i + 1} 行 enLines 含中文：${en}`);
+            issues.push(`第 ${i + 1} 行 enLines 含中文：${en}`);
           }
           if (!this.isMostlyAsciiEnglish(en)) {
-            throw new Error(`第 ${i + 1} 行 enLines 含非 ASCII 字符：${en}`);
+            issues.push(`第 ${i + 1} 行 enLines 含非 ASCII 字符：${en}`);
           }
           if (this.containsIpaLike(en)) {
-            throw new Error(`第 ${i + 1} 行 enLines 含音标/IPA：${en}`);
+            issues.push(`第 ${i + 1} 行 enLines 含音标/IPA：${en}`);
           }
         }
+        return issues;
       };
 
-      try {
-        validateOrThrow(zhLines, enLines);
-      } catch (e) {
+      const initialIssues = collectValidationIssues(zhLines, enLines);
+      if (initialIssues.length > 0) {
         // One retry: ask Qwen to rewrite the JSON strictly without IPA/explanations.
         const retryCompletion = await client.chat.completions.create({
           model: config.vlModel || 'qwen3-vl-flash',
@@ -520,7 +525,7 @@ export class OCRService {
                 },
                 {
                   type: 'text',
-                  text: this.buildRetryPrompt(this.getErrorMessage(e)),
+                  text: this.buildRetryPrompt(initialIssues.join('\n')), 
                 },
               ],
             },
@@ -597,21 +602,27 @@ export class OCRService {
           );
         }
 
-        validateOrThrow(zhLines2, enLines2);
+        const retryIssues = collectValidationIssues(zhLines2, enLines2);
 
         return {
           originalText: originalText2,
           chineseText: zhLines2.join('\n'),
           englishText: enLines2.join('\n'),
           wordPairs: wordPairs2.map(p => ({ en: p.en, zh: p.zh, lemma: p.lemma })),
+          hasValidationIssues: retryIssues.length > 0,
+          validationIssues: retryIssues,
         };
       }
+
+      const issues = collectValidationIssues(zhLines, enLines);
 
       const result = {
         originalText,
         chineseText: zhLines.join('\n'),
         englishText: enLines.join('\n'),
         wordPairs: wordPairs.map(p => ({ en: p.en, zh: p.zh, lemma: p.lemma })),
+        hasValidationIssues: issues.length > 0,
+        validationIssues: issues,
       };
 
       // 打印最终返回的数据（用于调试）

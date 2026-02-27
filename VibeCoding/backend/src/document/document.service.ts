@@ -8,6 +8,7 @@ import { AIService } from '../ai/ai.service';
 @Injectable()
 export class DocumentService {
   private readonly logger = new Logger(DocumentService.name);
+  private readonly generatingQuestionDocs = new Set<string>();
 
   constructor(
     private prisma: PrismaService,
@@ -64,6 +65,7 @@ export class DocumentService {
     const chineseTexts: string[] = [];
     const englishTexts: string[] = [];
     const allWordPairs: Array<{ en: string; zh: string; lemma?: string }> = [];
+    const allValidationIssues: string[] = [];
 
     for (const file of files) {
       const mimeType = file.mimetype;
@@ -77,6 +79,9 @@ export class DocumentService {
       englishTexts.push(ocrResult.englishText);
       if (ocrResult.wordPairs) {
         allWordPairs.push(...ocrResult.wordPairs);
+      }
+      if (ocrResult.validationIssues?.length) {
+        allValidationIssues.push(...ocrResult.validationIssues.map((issue) => `[${file.originalname}] ${issue}`));
       }
     }
 
@@ -95,6 +100,7 @@ export class DocumentService {
       files.reduce((sum, f) => sum + f.size, 0),
       'image/*',
       allWordPairs,
+      allValidationIssues,
     );
   }
 
@@ -111,6 +117,7 @@ export class DocumentService {
     fileSize: number,
     mimeType: string,
     wordPairs: Array<{ en: string; zh: string; lemma?: string }> = [],
+    validationIssues: string[] = [],
   ) {
     // 1. Create Document metadata with OCR results
     const document = await this.prisma.document.create({
@@ -124,6 +131,20 @@ export class DocumentService {
         englishText: englishText,     // 存储纯英文的句子和单词
       },
     });
+
+    // 兼容：若数据库已存在 OCR 校验字段则写入；否则忽略
+    if (validationIssues.length > 0) {
+      try {
+        await this.prisma.$executeRawUnsafe(
+          `UPDATE "Document" SET "hasOcrValidationIssues" = $1, "ocrValidationIssues" = $2 WHERE "id" = $3`,
+          true,
+          validationIssues.join('\n'),
+          document.id,
+        );
+      } catch (e: any) {
+        this.logger.warn(`Skip saving OCR validation flags (column may not exist yet): ${e.message}`);
+      }
+    }
 
     // 1.5 保存结构化单词对
     if (wordPairs.length > 0) {
@@ -621,7 +642,14 @@ export class DocumentService {
 
   async generateQuestions(documentId: string, force: boolean = false) {
     this.logger.log(`[generateQuestions] Starting for document ${documentId}, force=${force}`);
-    
+
+    if (this.generatingQuestionDocs.has(documentId)) {
+      this.logger.warn(`[generateQuestions] Already running for document ${documentId}, reject duplicate request`);
+      throw new Error('题库正在生成中，请稍后再试');
+    }
+    this.generatingQuestionDocs.add(documentId);
+
+    try {
     const doc = await this.prisma.document.findUnique({
       where: { id: documentId },
       include: {
@@ -629,7 +657,7 @@ export class DocumentService {
           include: { sentences: true },
         },
       },
-    });
+    }) as any;
 
     if (!doc) {
       this.logger.error(`[generateQuestions] Document not found: ${documentId}`);
@@ -645,17 +673,42 @@ export class DocumentService {
     // 1. 解析 OCR 提取的结构化文本
     const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
     const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-    
+
     this.logger.log(`[generateQuestions] Parsed ${zhLines.length} Chinese lines, ${enLines.length} English lines`);
-    
+
+    // B 模式：问题行保留展示，但题库生成时跳过
+    const invalidLineIndexes = new Set<number>();
+    if (doc.ocrValidationIssues) {
+      const lines = doc.ocrValidationIssues.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+      for (const line of lines) {
+        const m = line.match(/第\s*(\d+)\s*行/);
+        if (m) {
+          const oneBased = Number(m[1]);
+          if (Number.isFinite(oneBased) && oneBased > 0) {
+            invalidLineIndexes.add(oneBased - 1);
+          }
+        }
+      }
+    }
+
+    const allPairs = zhLines
+      .map((zh, i) => ({ zh, en: enLines[i], index: i }))
+      .filter((item) => item.en);
+
+    const validPairs = allPairs.filter((item) => !invalidLineIndexes.has(item.index));
+
     // 简单的句子/单词分类逻辑（对应前端展示逻辑）
-    const sentencePairs = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
-      .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15));
-    
-    const wordPairs = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
-      .filter(item => item.en && !(item.en.includes(' ') && item.en.length > 15));
-    
-    this.logger.log(`[generateQuestions] Found ${sentencePairs.length} sentence pairs, ${wordPairs.length} word pairs`);
+    const sentencePairs = validPairs.filter(
+      (item) => item.en.includes(' ') && item.en.length > 15,
+    );
+
+    const wordPairs = validPairs.filter(
+      (item) => !(item.en.includes(' ') && item.en.length > 15),
+    );
+
+    this.logger.log(
+      `[generateQuestions] Found ${sentencePairs.length} sentence pairs, ${wordPairs.length} word pairs (skipped invalid lines: ${invalidLineIndexes.size})`,
+    );
 
     // 2. 为没有题目的句子生成题目（分批，避免频繁调用导致限流/超时）
     const sentences = doc.paragraphs.flatMap(p => p.sentences);
@@ -756,64 +809,24 @@ export class DocumentService {
       await sleep(300);
     }
 
-    // 3. 为单词生成"单词选择"题
-    this.logger.log(`[generateQuestions] Processing ${wordPairs.length} word pairs`);
-    for (let i = 0; i < wordPairs.length; i++) {
-      const pair = wordPairs[i];
-      if ((i + 1) % 10 === 0) {
-        this.logger.log(`[generateQuestions] Word progress: ${i + 1}/${wordPairs.length}`);
-      }
-      
-      try {
-        // 单词题增量检查：如果该单词已经作为题目存在（根据 answerEn 判定），则跳过
-        if (!force) {
-          const hasWordQuestion = await this.prisma.exerciseQuestion.count({
-            where: { 
-              documentId,
-              type: 'WORD_MATCHING',
-              answerEn: pair.en!
-            }
-          });
-          if (hasWordQuestion > 0) continue;
-        }
-
-        const aiRes = await this.aiService.generateAdvancedQuestions({
-          chinese_sentence: '',
-          chinese_words: [pair.zh],
-          english_sentence: '',
-          english_words: [pair.en!]
-        });
-
-        if (Array.isArray(aiRes.word_matching)) {
-          for (const wm of aiRes.word_matching) {
-            const firstSentId = doc.paragraphs[0]?.sentences[0]?.id;
-            if (firstSentId) {
-              await this.prisma.exerciseQuestion.create({
-                data: {
-                  type: 'WORD_MATCHING',
-                  promptZh: wm.chinese_meaning,
-                  answerEn: wm.correct_word,
-                  options: wm.options,
-                  structuredData: wm as any,
-                  documentId,
-                  sentenceId: firstSentId,
-                },
-              });
-              questionsCreated++;
-            }
-          }
-        }
-      } catch (e: any) {
-        this.logger.error(`[generateQuestions] Failed to generate word question: ${e.message}`);
-      }
-      // 单词之间也稍微停顿（但比句子短，因为单词题通常更快）
-      if (i < wordPairs.length - 1) {
-        await sleep(50);
-      }
+    // 3. 单词题生成非常耗时，容易导致前端代理 504。改为单独走“句子单词测试题”入口。
+    const skippedWordPairs = wordPairs.length;
+    if (skippedWordPairs > 0) {
+      this.logger.log(
+        `[generateQuestions] Skip WORD_MATCHING in this endpoint to avoid timeout. skipped=${skippedWordPairs}`,
+      );
     }
 
-    this.logger.log(`[generateQuestions] Completed: created=${questionsCreated}, failed=${sentenceFailed}`);
-    return { total: questionsCreated, generated: questionsCreated, failed: sentenceFailed };
+    this.logger.log(`[generateQuestions] Completed: created=${questionsCreated}, failed=${sentenceFailed}, skippedWordPairs=${skippedWordPairs}`);
+    return {
+      total: questionsCreated,
+      generated: questionsCreated,
+      failed: sentenceFailed,
+      skippedWordPairs,
+    };
+    } finally {
+      this.generatingQuestionDocs.delete(documentId);
+    }
   }
 
   async getQuestions(documentId: string, limit: number = 20) {

@@ -21,15 +21,24 @@ let SentenceBuilderController = class SentenceBuilderController {
         this.service = service;
     }
     async getSceneLexicon(body) {
-        const { scene, targetUserLevel = 'A2' } = body;
-        return this.service.generateSceneLexicon(scene, targetUserLevel);
+        const { scene, word, targetUserLevel = 'A2' } = body;
+        return this.service.generateSceneLexicon(scene, targetUserLevel, word);
     }
     async evaluate(body) {
-        const { scene, sentence, userLevel = 'A2' } = body;
-        return this.service.evaluateSentence({ scene, sentence, userLevel });
+        const { scene, word, sentence, userLevel = 'A2' } = body;
+        return this.service.evaluateSentence({ scene, word, sentence, userLevel });
     }
     async nextToken(body) {
         return this.service.suggestNextTokens(body);
+    }
+    async save(body) {
+        return this.service.saveSentence(body);
+    }
+    async list(word, scene) {
+        return this.service.listSavedSentences({ word, scene });
+    }
+    async remove(id) {
+        return this.service.deleteSavedSentence(id);
     }
 };
 exports.SentenceBuilderController = SentenceBuilderController;
@@ -54,6 +63,28 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], SentenceBuilderController.prototype, "nextToken", null);
+__decorate([
+    (0, common_1.Post)('saved'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], SentenceBuilderController.prototype, "save", null);
+__decorate([
+    (0, common_1.Get)('saved'),
+    __param(0, (0, common_1.Query)('word')),
+    __param(1, (0, common_1.Query)('scene')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", Promise)
+], SentenceBuilderController.prototype, "list", null);
+__decorate([
+    (0, common_1.Delete)('saved/:id'),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], SentenceBuilderController.prototype, "remove", null);
 exports.SentenceBuilderController = SentenceBuilderController = __decorate([
     (0, common_1.Controller)('sentence-builder'),
     __metadata("design:paramtypes", [sentence_builder_service_1.SentenceBuilderService])

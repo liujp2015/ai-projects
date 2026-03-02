@@ -47,15 +47,14 @@ exports.DocumentService = void 0;
 const common_1 = require("@nestjs/common");
 const mammoth = __importStar(require("mammoth"));
 const prisma_service_1 = require("../prisma/prisma.service");
-const pdfjs = __importStar(require("pdfjs-dist"));
 const ocr_service_1 = require("../ai/ocr.service");
 const ai_service_1 = require("../ai/ai.service");
-const client_1 = require("@prisma/client");
 let DocumentService = DocumentService_1 = class DocumentService {
     prisma;
     ocrService;
     aiService;
     logger = new common_1.Logger(DocumentService_1.name);
+    generatingQuestionDocs = new Set();
     constructor(prisma, ocrService, aiService) {
         this.prisma = prisma;
         this.ocrService = ocrService;
@@ -66,6 +65,10 @@ let DocumentService = DocumentService_1 = class DocumentService {
         const mimeType = file.mimetype;
         try {
             if (mimeType === 'application/pdf') {
+                const pdfjs = await import('pdfjs-dist');
+                if (pdfjs.GlobalWorkerOptions) {
+                    pdfjs.GlobalWorkerOptions.workerSrc = '';
+                }
                 const loadingTask = pdfjs.getDocument({ data: new Uint8Array(file.buffer) });
                 const pdf = await loadingTask.promise;
                 let fullText = '';
@@ -101,6 +104,8 @@ let DocumentService = DocumentService_1 = class DocumentService {
         const originalTexts = [];
         const chineseTexts = [];
         const englishTexts = [];
+        const allWordPairs = [];
+        const allValidationIssues = [];
         for (const file of files) {
             const mimeType = file.mimetype;
             if (!mimeType.startsWith('image/')) {
@@ -110,16 +115,22 @@ let DocumentService = DocumentService_1 = class DocumentService {
             originalTexts.push(ocrResult.originalText);
             chineseTexts.push(ocrResult.chineseText);
             englishTexts.push(ocrResult.englishText);
+            if (ocrResult.wordPairs) {
+                allWordPairs.push(...ocrResult.wordPairs);
+            }
+            if (ocrResult.validationIssues?.length) {
+                allValidationIssues.push(...ocrResult.validationIssues.map((issue) => `[${file.originalname}] ${issue}`));
+            }
         }
         const mergedOriginal = originalTexts.join('\n\n');
         const mergedChinese = chineseTexts.filter((t) => t.trim()).join('\n');
         const mergedEnglish = englishTexts.filter((t) => t.trim()).join('\n');
-        return this.saveStructuredContentWithOCR(mergedOriginal, mergedChinese, mergedEnglish, title, `${title}.images`, files.reduce((sum, f) => sum + f.size, 0), 'image/*');
+        return this.saveStructuredContentWithOCR(mergedOriginal, mergedChinese, mergedEnglish, title, `${title}.images`, files.reduce((sum, f) => sum + f.size, 0), 'image/*', allWordPairs, allValidationIssues);
     }
     async saveRawText(content, title) {
         return this.saveStructuredContent(content, title, 'manual-input.txt', Buffer.byteLength(content), 'text/plain');
     }
-    async saveStructuredContentWithOCR(originalText, chineseText, englishText, title, filename, fileSize, mimeType) {
+    async saveStructuredContentWithOCR(originalText, chineseText, englishText, title, filename, fileSize, mimeType, wordPairs = [], validationIssues = []) {
         const document = await this.prisma.document.create({
             data: {
                 title: title,
@@ -131,6 +142,25 @@ let DocumentService = DocumentService_1 = class DocumentService {
                 englishText: englishText,
             },
         });
+        if (validationIssues.length > 0) {
+            try {
+                await this.prisma.$executeRawUnsafe(`UPDATE "Document" SET "hasOcrValidationIssues" = $1, "ocrValidationIssues" = $2 WHERE "id" = $3`, true, validationIssues.join('\n'), document.id);
+            }
+            catch (e) {
+                this.logger.warn(`Skip saving OCR validation flags (column may not exist yet): ${e.message}`);
+            }
+        }
+        if (wordPairs.length > 0) {
+            await this.prisma.alignedWordPair.createMany({
+                data: wordPairs.map((p, i) => ({
+                    en: p.en,
+                    zh: p.zh,
+                    lemma: p.lemma || null,
+                    orderIndex: i,
+                    documentId: document.id,
+                })),
+            });
+        }
         return this.saveStructuredContent(originalText, title, filename, fileSize, mimeType, document.id);
     }
     async saveStructuredContent(text, title, filename, fileSize, mimeType, existingDocumentId) {
@@ -190,6 +220,9 @@ let DocumentService = DocumentService_1 = class DocumentService {
                         sentences: { orderBy: { orderIndex: 'asc' } },
                     },
                 },
+                alignedWordPairs: {
+                    orderBy: { orderIndex: 'asc' },
+                },
             },
         });
     }
@@ -225,13 +258,27 @@ let DocumentService = DocumentService_1 = class DocumentService {
             englishText: newEnLines.join('\n'),
         };
         const mergedResult = await this.ocrService.mergeAndStructureContent(doc.originalText || '', doc.chineseText || '', doc.englishText || '', [newOCRResult]);
-        await this.prisma.document.update({
-            where: { id: documentId },
-            data: {
-                originalText: mergedResult.originalText,
-                chineseText: mergedResult.chineseText,
-                englishText: mergedResult.englishText,
-            },
+        await this.prisma.$transaction(async (tx) => {
+            await tx.document.update({
+                where: { id: documentId },
+                data: {
+                    originalText: mergedResult.originalText,
+                    chineseText: mergedResult.chineseText,
+                    englishText: mergedResult.englishText,
+                },
+            });
+            if (mergedResult.wordPairs && mergedResult.wordPairs.length > 0) {
+                await tx.alignedWordPair.deleteMany({ where: { documentId } });
+                await tx.alignedWordPair.createMany({
+                    data: mergedResult.wordPairs.map((p, i) => ({
+                        en: p.en,
+                        zh: p.zh,
+                        lemma: p.lemma || null,
+                        orderIndex: i,
+                        documentId,
+                    })),
+                });
+            }
         });
         this.logger.log(`Successfully appended text to document ${documentId}. Content merged and structured.`);
         this.logger.log(`Updated originalText length: ${mergedResult.originalText.length}`);
@@ -250,13 +297,27 @@ let DocumentService = DocumentService_1 = class DocumentService {
             newImagesOCRResults.push(ocrResult);
         }
         const mergedResult = await this.ocrService.mergeAndStructureContent(doc.originalText || '', doc.chineseText || '', doc.englishText || '', newImagesOCRResults);
-        await this.prisma.document.update({
-            where: { id: documentId },
-            data: {
-                originalText: mergedResult.originalText,
-                chineseText: mergedResult.chineseText,
-                englishText: mergedResult.englishText,
-            },
+        await this.prisma.$transaction(async (tx) => {
+            await tx.document.update({
+                where: { id: documentId },
+                data: {
+                    originalText: mergedResult.originalText,
+                    chineseText: mergedResult.chineseText,
+                    englishText: mergedResult.englishText,
+                },
+            });
+            if (mergedResult.wordPairs && mergedResult.wordPairs.length > 0) {
+                await tx.alignedWordPair.deleteMany({ where: { documentId } });
+                await tx.alignedWordPair.createMany({
+                    data: mergedResult.wordPairs.map((p, i) => ({
+                        en: p.en,
+                        zh: p.zh,
+                        lemma: p.lemma || null,
+                        orderIndex: i,
+                        documentId,
+                    })),
+                });
+            }
         });
         this.logger.log(`Successfully appended ${files.length} image(s) to document ${documentId}. Content merged and structured.`);
         this.logger.log(`Updated originalText length: ${mergedResult.originalText.length}`);
@@ -337,10 +398,15 @@ let DocumentService = DocumentService_1 = class DocumentService {
         await this.prisma.sentence.createMany({
             data: sentenceData,
         });
-        const alignedValues = alignedPairs
-            .map((pair, index) => client_1.Prisma.sql `(${client_1.Prisma.raw('gen_random_uuid()')}, ${index}, ${pair.en}, ${pair.zh}, ${documentId}, NOW(), NOW())`);
-        if (alignedValues.length > 0) {
-            await this.prisma.$executeRaw(client_1.Prisma.sql `INSERT INTO "AlignedSentencePair" ("id", "orderIndex", "en", "zh", "documentId", "createdAt", "updatedAt") VALUES ${client_1.Prisma.join(alignedValues)}`);
+        if (alignedPairs.length > 0) {
+            await this.prisma.alignedSentencePair.createMany({
+                data: alignedPairs.map((pair, index) => ({
+                    orderIndex: index,
+                    en: pair.en,
+                    zh: pair.zh,
+                    documentId,
+                })),
+            });
         }
         this.logger.log(`Successfully realigned ${documentId} into ${alignedPairs.length} sentences`);
         const mergedZh = alignedPairs.map(p => p.zh).join('\n');
@@ -457,130 +523,469 @@ let DocumentService = DocumentService_1 = class DocumentService {
             .toLowerCase();
     }
     async generateQuestions(documentId, force = false) {
-        const doc = await this.prisma.document.findUnique({
-            where: { id: documentId },
-            include: {
-                paragraphs: {
-                    include: { sentences: true },
+        this.logger.log(`[generateQuestions] Starting for document ${documentId}, force=${force}`);
+        if (this.generatingQuestionDocs.has(documentId)) {
+            this.logger.warn(`[generateQuestions] Already running for document ${documentId}, reject duplicate request`);
+            throw new Error('题库正在生成中，请稍后再试');
+        }
+        this.generatingQuestionDocs.add(documentId);
+        try {
+            const doc = await this.prisma.document.findUnique({
+                where: { id: documentId },
+                include: {
+                    paragraphs: {
+                        include: { sentences: true },
+                    },
                 },
-            },
-        });
-        if (!doc)
-            throw new Error('Document not found');
-        if (force) {
-            await this.prisma.exerciseQuestion.deleteMany({ where: { documentId } });
-        }
-        const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-        const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-        const sentencePairs = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
-            .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15));
-        const wordPairs = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
-            .filter(item => item.en && !(item.en.includes(' ') && item.en.length > 15));
-        const sentences = doc.paragraphs.flatMap(p => p.sentences);
-        let questionsCreated = 0;
-        for (const pair of sentencePairs) {
-            try {
-                const matchedSent = sentences.find(s => this.normalizeForCompare(s.content).includes(this.normalizeForCompare(pair.en)) ||
-                    this.normalizeForCompare(pair.en).includes(this.normalizeForCompare(s.content)));
-                if (!matchedSent)
-                    continue;
-                if (!force) {
-                    const hasQuestions = await this.prisma.exerciseQuestion.count({
-                        where: { sentenceId: matchedSent.id }
-                    });
-                    if (hasQuestions > 0)
-                        continue;
-                }
-                const aiRes = await this.aiService.generateAdvancedQuestions({
-                    chinese_sentence: pair.zh,
-                    chinese_words: [],
-                    english_sentence: pair.en,
-                    english_words: []
-                });
-                if (aiRes.sentence_completion) {
-                    const sc = aiRes.sentence_completion;
-                    await this.prisma.exerciseQuestion.create({
-                        data: {
-                            type: 'SENTENCE_COMPLETION',
-                            promptZh: pair.zh,
-                            answerEn: pair.en,
-                            blankedEn: sc.template,
-                            structuredData: sc,
-                            documentId,
-                            sentenceId: matchedSent.id,
-                        },
-                    });
-                    if (aiRes.sentence_scramble) {
-                        const ss = aiRes.sentence_scramble;
-                        const shuffledTokens = this.shuffleArray((ss.tokens || []));
-                        await this.prisma.exerciseQuestion.create({
-                            data: {
-                                type: 'SCRAMBLE',
-                                promptZh: ss.promptZh || pair.zh,
-                                answerEn: ss.answerEn || pair.en,
-                                scrambledTokens: shuffledTokens,
-                                documentId,
-                                sentenceId: matchedSent.id,
-                            },
-                        });
-                    }
-                    questionsCreated += 2;
-                }
+            });
+            if (!doc) {
+                this.logger.error(`[generateQuestions] Document not found: ${documentId}`);
+                throw new Error('Document not found');
             }
-            catch (e) {
-                this.logger.error(`Failed to generate sentence question: ${e.message}`);
+            this.logger.log(`[generateQuestions] Document found: ${doc.title}, paragraphs: ${doc.paragraphs.length}`);
+            if (force) {
+                await this.prisma.exerciseQuestion.deleteMany({ where: { documentId } });
             }
-        }
-        for (const pair of wordPairs) {
-            try {
-                if (!force) {
-                    const hasWordQuestion = await this.prisma.exerciseQuestion.count({
-                        where: {
-                            documentId,
-                            type: 'WORD_MATCHING',
-                            answerEn: pair.en
+            const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            this.logger.log(`[generateQuestions] Parsed ${zhLines.length} Chinese lines, ${enLines.length} English lines`);
+            const invalidLineIndexes = new Set();
+            if (doc.ocrValidationIssues) {
+                const lines = doc.ocrValidationIssues.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+                for (const line of lines) {
+                    const m = line.match(/第\s*(\d+)\s*行/);
+                    if (m) {
+                        const oneBased = Number(m[1]);
+                        if (Number.isFinite(oneBased) && oneBased > 0) {
+                            invalidLineIndexes.add(oneBased - 1);
                         }
-                    });
-                    if (hasWordQuestion > 0)
-                        continue;
+                    }
                 }
-                const aiRes = await this.aiService.generateAdvancedQuestions({
-                    chinese_sentence: '',
-                    chinese_words: [pair.zh],
-                    english_sentence: '',
-                    english_words: [pair.en]
-                });
-                if (Array.isArray(aiRes.word_matching)) {
-                    for (const wm of aiRes.word_matching) {
-                        const firstSentId = doc.paragraphs[0]?.sentences[0]?.id;
-                        if (firstSentId) {
+            }
+            const allPairs = zhLines
+                .map((zh, i) => ({ zh, en: enLines[i], index: i }))
+                .filter((item) => item.en);
+            const validPairs = allPairs.filter((item) => !invalidLineIndexes.has(item.index));
+            const sentencePairs = validPairs.filter((item) => item.en.includes(' ') && item.en.length > 15);
+            const wordPairs = validPairs.filter((item) => !(item.en.includes(' ') && item.en.length > 15));
+            this.logger.log(`[generateQuestions] Found ${sentencePairs.length} sentence pairs, ${wordPairs.length} word pairs (skipped invalid lines: ${invalidLineIndexes.size})`);
+            const sentences = doc.paragraphs.flatMap(p => p.sentences);
+            let questionsCreated = 0;
+            let sentenceFailed = 0;
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+            const batchSize = 5;
+            const totalBatches = Math.ceil(sentencePairs.length / batchSize);
+            for (let idx = 0; idx < sentencePairs.length; idx += batchSize) {
+                const batch = sentencePairs.slice(idx, idx + batchSize);
+                const batchNum = Math.floor(idx / batchSize) + 1;
+                this.logger.log(`[generateQuestions] Processing batch ${batchNum}/${totalBatches} (${batch.length} sentences)`);
+                for (const pair of batch) {
+                    try {
+                        const matchedSent = sentences.find((s) => this
+                            .normalizeForCompare(s.content)
+                            .includes(this.normalizeForCompare(pair.en)) ||
+                            this
+                                .normalizeForCompare(pair.en)
+                                .includes(this.normalizeForCompare(s.content)));
+                        if (!matchedSent) {
+                            this.logger.warn(`[generateQuestions] No matched sentence for: ${pair.en?.substring(0, 50)}`);
+                            continue;
+                        }
+                        if (!force) {
+                            const hasQuestions = await this.prisma.exerciseQuestion.count({
+                                where: { sentenceId: matchedSent.id },
+                            });
+                            if (hasQuestions > 0) {
+                                this.logger.debug(`[generateQuestions] Sentence already has questions, skipping`);
+                                continue;
+                            }
+                        }
+                        this.logger.debug(`[generateQuestions] Calling AI for sentence: ${pair.en?.substring(0, 50)}...`);
+                        const aiRes = await this.aiService.generateAdvancedQuestions({
+                            chinese_sentence: pair.zh,
+                            chinese_words: [],
+                            english_sentence: pair.en,
+                            english_words: [],
+                        });
+                        if (aiRes.sentence_completion) {
+                            const sc = aiRes.sentence_completion;
                             await this.prisma.exerciseQuestion.create({
                                 data: {
-                                    type: 'WORD_MATCHING',
-                                    promptZh: wm.chinese_meaning,
-                                    answerEn: wm.correct_word,
-                                    options: wm.options,
-                                    structuredData: wm,
+                                    type: 'SENTENCE_COMPLETION',
+                                    promptZh: pair.zh,
+                                    answerEn: pair.en,
+                                    blankedEn: sc.template,
+                                    structuredData: sc,
                                     documentId,
-                                    sentenceId: firstSentId,
+                                    sentenceId: matchedSent.id,
                                 },
                             });
-                            questionsCreated++;
+                            if (aiRes.sentence_scramble) {
+                                const ss = aiRes.sentence_scramble;
+                                const shuffledTokens = this.shuffleArray((ss.tokens || []));
+                                await this.prisma.exerciseQuestion.create({
+                                    data: {
+                                        type: 'SCRAMBLE',
+                                        promptZh: ss.promptZh || pair.zh,
+                                        answerEn: ss.answerEn || pair.en,
+                                        scrambledTokens: shuffledTokens,
+                                        documentId,
+                                        sentenceId: matchedSent.id,
+                                    },
+                                });
+                            }
+                            questionsCreated += 2;
+                            this.logger.debug(`[generateQuestions] Created 2 questions for sentence`);
                         }
                     }
+                    catch (e) {
+                        sentenceFailed++;
+                        this.logger.error(`[generateQuestions] Failed to generate sentence question: ${e.message}`, e.stack);
+                    }
+                    await sleep(100);
                 }
+                this.logger.log(`[generateQuestions] Batch ${batchNum} completed. Progress: ${questionsCreated} questions created, ${sentenceFailed} failed`);
+                await sleep(300);
             }
-            catch (e) {
-                this.logger.error(`Failed to generate word question: ${e.message}`);
+            const skippedWordPairs = wordPairs.length;
+            if (skippedWordPairs > 0) {
+                this.logger.log(`[generateQuestions] Skip WORD_MATCHING in this endpoint to avoid timeout. skipped=${skippedWordPairs}`);
             }
+            this.logger.log(`[generateQuestions] Completed: created=${questionsCreated}, failed=${sentenceFailed}, skippedWordPairs=${skippedWordPairs}`);
+            return {
+                total: questionsCreated,
+                generated: questionsCreated,
+                failed: sentenceFailed,
+                skippedWordPairs,
+            };
         }
-        return { total: questionsCreated, generated: questionsCreated };
+        finally {
+            this.generatingQuestionDocs.delete(documentId);
+        }
     }
     async getQuestions(documentId, limit = 20) {
         const questions = await this.prisma.exerciseQuestion.findMany({
             where: { documentId },
         });
         return this.shuffleArray(questions).slice(0, limit);
+    }
+    async generateWordQuiz(documentId, force = false) {
+        const doc = await this.prisma.document.findUnique({
+            where: { id: documentId },
+            include: { extractedWords: true },
+        });
+        if (!doc)
+            throw new Error('Document not found');
+        let words = doc.extractedWords;
+        if (words.length === 0) {
+            await this.extractWordsFromDocument(documentId);
+            const updated = await this.prisma.document.findUnique({
+                where: { id: documentId },
+                include: { extractedWords: true },
+            });
+            words = updated?.extractedWords ?? [];
+        }
+        if (words.length === 0) {
+            throw new Error('未提取到可用于出题的单词，请先确保核心句子存在且可提取。');
+        }
+        if (force) {
+            await this.prisma.wordQuizQuestion.deleteMany({ where: { documentId } });
+        }
+        else {
+            const existing = await this.prisma.wordQuizQuestion.count({ where: { documentId } });
+            if (existing > 0) {
+                return { total: existing, generated: 0 };
+            }
+        }
+        const usable = words.filter((w) => (w.translation ?? '').trim().length > 0);
+        if (usable.length === 0) {
+            throw new Error('提取到的单词缺少中文翻译，无法生成测试题。请先重新“提取词性”。');
+        }
+        const batchSize = 15;
+        let generated = 0;
+        for (let i = 0; i < usable.length; i += batchSize) {
+            const batch = usable.slice(i, i + batchSize);
+            try {
+                const aiQuestions = await this.aiService.generateWordQuizQuestions(batch.map((w) => ({
+                    word: w.word,
+                    translation: w.translation ?? '',
+                    partOfSpeech: w.partOfSpeech,
+                    sentence: w.sentence,
+                })));
+                if (Array.isArray(aiQuestions) && aiQuestions.length > 0) {
+                    await this.prisma.wordQuizQuestion.createMany({
+                        data: aiQuestions
+                            .filter((q) => q && q.type && q.prompt && q.answer && Array.isArray(q.options))
+                            .map((q) => ({
+                            type: q.type,
+                            prompt: String(q.prompt),
+                            answer: String(q.answer),
+                            options: q.options.map((x) => String(x)),
+                            sentenceContext: q.sentenceContext ? String(q.sentenceContext) : null,
+                            documentId,
+                        })),
+                    });
+                    generated += aiQuestions.length;
+                }
+            }
+            catch (e) {
+                this.logger.error(`Failed to generate word quiz batch: ${e.message}`);
+            }
+        }
+        return { total: generated, generated };
+    }
+    async getWordQuiz(documentId, limit = 9999) {
+        const questions = await this.prisma.wordQuizQuestion.findMany({
+            where: { documentId },
+            orderBy: { createdAt: 'desc' },
+        });
+        const shuffled = questions.map((q) => {
+            const opts = Array.isArray(q.options) ? q.options.map((x) => String(x)) : [];
+            const ans = String(q.answer ?? '').trim();
+            let normalizedOpts = opts;
+            if (ans && !normalizedOpts.some((o) => String(o).trim() === ans)) {
+                normalizedOpts = [ans, ...normalizedOpts].slice(0, 4);
+            }
+            const shuffledOpts = this.shuffleArray(normalizedOpts);
+            return { ...q, options: shuffledOpts };
+        });
+        return this.shuffleArray(shuffled).slice(0, limit);
+    }
+    async extractWordsFromDocument(documentId) {
+        try {
+            const doc = await this.prisma.document.findUnique({
+                where: { id: documentId },
+            });
+            if (!doc) {
+                throw new Error('Document not found');
+            }
+            const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            const sentences = zhLines
+                .map((zh, i) => ({ zh, en: enLines[i] }))
+                .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15))
+                .map(item => item.en);
+            if (sentences.length === 0) {
+                this.logger.warn(`No core sentences found in document ${documentId} (chineseText/englishText)`);
+                return { extracted: 0, message: 'No core sentences found in document' };
+            }
+            this.logger.log(`Extracting words from ${sentences.length} core sentences in document ${documentId}`);
+            const batchSize = 15;
+            const batches = [];
+            for (let i = 0; i < sentences.length; i += batchSize) {
+                batches.push(sentences.slice(i, i + batchSize));
+            }
+            this.logger.log(`Processing ${batches.length} batches of sentences`);
+            const allExtractedWords = [];
+            for (let i = 0; i < batches.length; i++) {
+                try {
+                    this.logger.log(`Processing batch ${i + 1}/${batches.length} (${batches[i].length} sentences)`);
+                    const batchWords = await this.aiService.extractWordsFromSentences(batches[i]);
+                    allExtractedWords.push(...batchWords);
+                }
+                catch (error) {
+                    this.logger.error(`Failed to process batch ${i + 1}: ${error.message}`);
+                }
+            }
+            const extractedWords = allExtractedWords;
+            this.logger.log(`AI extracted ${extractedWords.length} words, saving to database...`);
+            await this.prisma.extractedWord.deleteMany({
+                where: { documentId },
+            });
+            if (extractedWords.length > 0) {
+                await this.prisma.extractedWord.createMany({
+                    data: extractedWords.map(w => ({
+                        word: w.word,
+                        lemma: w.lemma || null,
+                        partOfSpeech: w.partOfSpeech,
+                        translation: w.translation || null,
+                        sentence: w.sentence,
+                        documentId,
+                    })),
+                });
+                this.logger.log(`Successfully saved ${extractedWords.length} words to database`);
+            }
+            return {
+                extracted: extractedWords.length,
+                message: `Successfully extracted ${extractedWords.length} words`,
+            };
+        }
+        catch (error) {
+            this.logger.error(`Failed to extract words from document ${documentId}: ${error.message}`);
+            this.logger.error(error.stack);
+            throw error;
+        }
+    }
+    async getExtractedWords(documentId, partOfSpeech) {
+        const where = { documentId };
+        if (partOfSpeech) {
+            where.partOfSpeech = partOfSpeech;
+        }
+        const words = await this.prisma.extractedWord.findMany({
+            where,
+            orderBy: { word: 'asc' },
+        });
+        return words;
+    }
+    async exportLemmas(documentId) {
+        const [aligned, extracted] = await Promise.all([
+            this.prisma.alignedWordPair.findMany({
+                where: { documentId },
+                select: { lemma: true },
+            }),
+            this.prisma.extractedWord.findMany({
+                where: { documentId },
+                select: { lemma: true },
+            }),
+        ]);
+        const lemmas = [...aligned, ...extracted]
+            .map((x) => (x.lemma ?? '').trim().toLowerCase())
+            .filter(Boolean)
+            .map((l) => l.replace(/\s+/g, '#'));
+        const seen = new Set();
+        const uniq = [];
+        for (const w of lemmas) {
+            if (seen.has(w))
+                continue;
+            seen.add(w);
+            uniq.push(w);
+        }
+        return uniq.join(' ');
+    }
+    async backfillLemmas(documentId) {
+        const doc = await this.prisma.document.findUnique({
+            where: { id: documentId },
+            include: { alignedWordPairs: true }
+        });
+        if (!doc)
+            throw new Error('Document not found');
+        this.logger.log(`Starting backfill for document: ${documentId}. Current alignedWordPairs count: ${doc.alignedWordPairs.length}`);
+        if (doc.alignedWordPairs.length === 0 && doc.chineseText && doc.englishText) {
+            this.logger.log(`Initializing alignedWordPairs from text for document ${documentId}`);
+            const zhLines = doc.chineseText.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            const enLines = doc.englishText.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+            const words = [];
+            const maxLines = Math.min(zhLines.length, enLines.length);
+            for (let i = 0; i < maxLines; i++) {
+                const zh = zhLines[i];
+                const en = enLines[i];
+                if (en && !(en.includes(' ') && en.length > 15)) {
+                    words.push({ zh, en });
+                }
+            }
+            if (words.length > 0) {
+                await this.prisma.alignedWordPair.createMany({
+                    data: words.map((p, i) => ({
+                        en: p.en.trim(),
+                        zh: p.zh.trim(),
+                        orderIndex: i,
+                        documentId,
+                    })),
+                });
+                this.logger.log(`Initialized ${words.length} alignedWordPairs for document ${documentId}.`);
+            }
+        }
+        const [alignedEmpty, extractedEmpty] = await Promise.all([
+            this.prisma.alignedWordPair.findMany({
+                where: { documentId, OR: [{ lemma: null }, { lemma: '' }] },
+                select: { en: true },
+            }),
+            this.prisma.extractedWord.findMany({
+                where: { documentId, OR: [{ lemma: null }, { lemma: '' }] },
+                select: { word: true },
+            }),
+        ]);
+        const wordsToProcess = Array.from(new Set([
+            ...alignedEmpty.map(p => p.en.trim()),
+            ...extractedEmpty.map(w => w.word.trim())
+        ])).filter(Boolean);
+        this.logger.log(`Total words to process for backfill: ${wordsToProcess.length}`);
+        if (wordsToProcess.length === 0) {
+            return { total: 0, message: '该文档所有单词的原形已是最新，无需同步。' };
+        }
+        const batchSize = 100;
+        let totalUpdated = 0;
+        for (let i = 0; i < wordsToProcess.length; i += batchSize) {
+            const batch = wordsToProcess.slice(i, i + batchSize);
+            try {
+                const lemmaMap = await this.aiService.getLemmasForWords(batch);
+                for (const [word, lemma] of Object.entries(lemmaMap)) {
+                    if (!lemma)
+                        continue;
+                    const cleanLemma = String(lemma).toLowerCase().trim();
+                    const [res1, res2] = await Promise.all([
+                        this.prisma.alignedWordPair.updateMany({
+                            where: {
+                                documentId,
+                                en: { equals: word, mode: 'insensitive' },
+                                OR: [{ lemma: null }, { lemma: '' }]
+                            },
+                            data: { lemma: cleanLemma },
+                        }),
+                        this.prisma.extractedWord.updateMany({
+                            where: {
+                                documentId,
+                                word: { equals: word, mode: 'insensitive' },
+                                OR: [{ lemma: null }, { lemma: '' }]
+                            },
+                            data: { lemma: cleanLemma },
+                        })
+                    ]);
+                    if (res1.count > 0 || res2.count > 0) {
+                        totalUpdated++;
+                    }
+                }
+            }
+            catch (error) {
+                this.logger.error(`Failed to process lemma batch: ${error.message}`);
+            }
+        }
+        const extractedWithPos = await this.prisma.extractedWord.findMany({
+            where: { documentId },
+            select: { word: true, lemma: true, partOfSpeech: true },
+        });
+        const posByWord = new Map();
+        const posByLemma = new Map();
+        for (const ew of extractedWithPos) {
+            const w = ew.word.toLowerCase().trim();
+            if (!posByWord.has(w))
+                posByWord.set(w, ew.partOfSpeech);
+            if (ew.lemma) {
+                const l = ew.lemma.toLowerCase().trim();
+                if (!posByLemma.has(l))
+                    posByLemma.set(l, ew.partOfSpeech);
+            }
+        }
+        const alignedToUpdate = await this.prisma.alignedWordPair.findMany({
+            where: { documentId, OR: [{ partOfSpeech: null }, { partOfSpeech: '' }] },
+            select: { id: true, en: true, lemma: true },
+        });
+        let posUpdated = 0;
+        for (const pair of alignedToUpdate) {
+            const enLower = pair.en.toLowerCase().trim();
+            const pos = posByWord.get(enLower) ?? (pair.lemma ? posByLemma.get(pair.lemma.toLowerCase().trim()) : null);
+            if (pos) {
+                await this.prisma.alignedWordPair.update({
+                    where: { id: pair.id },
+                    data: { partOfSpeech: pos },
+                });
+                posUpdated++;
+            }
+        }
+        this.logger.log(`Backfill completed. Lemma updated: ${totalUpdated}, PartOfSpeech synced: ${posUpdated}`);
+        return {
+            total: totalUpdated,
+            posSynced: posUpdated,
+            message: totalUpdated > 0 || posUpdated > 0
+                ? `成功同步：原形 ${totalUpdated} 个，词性 ${posUpdated} 个。`
+                : '同步完成，但未发现新的原形或词性变更。',
+        };
+    }
+    async updateWordPair(pairId, data) {
+        return this.prisma.alignedWordPair.update({
+            where: { id: pairId },
+            data,
+        });
     }
 };
 exports.DocumentService = DocumentService;

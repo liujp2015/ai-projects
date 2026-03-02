@@ -133,16 +133,17 @@ let OCRService = OCRService_1 = class OCRService {
             '    { "en": "纯英文句子", "zh": "纯中文翻译" }\n' +
             '  ],\n' +
             '  "wordPairs": [\n' +
-            '    { "en": "纯英文单词", "zh": "纯中文对照" }\n' +
+            '    { "en": "纯英文单词", "zh": "纯中文对照", "lemma": "该英文单词的纯单词原形" }\n' +
             '  ]\n' +
             '}\n' +
             '\n' +
             '强约束：\n' +
             '1. sentencePairs 必须是语义完整的句子，wordPairs 必须是独立的单词或短语。\n' +
             '2. en 字段必须是纯英文（ASCII），zh 字段必须是纯中文。\n' +
-            '3. 严禁包含音标/IPA（如 /ˈ.../ 等）或词性标注（如 n., v. 等）。\n' +
-            '4. 所有字段值必须是字符串，不允许数组或对象。\n' +
-            '5. 输出必须只有 JSON，不要有任何额外文字或 Markdown 标记。');
+            '3. lemma 字段必须是该英文单词的纯单词原形（小写），不包含任何词性或解释。\n' +
+            '4. 严禁包含音标/IPA（如 /ˈ.../ 等）或词性标注（如 n., v. 等）。\n' +
+            '5. 所有字段值必须是字符串，不允许数组或对象。\n' +
+            '6. 输出必须只有 JSON，不要有任何额外文字或 Markdown 标记。');
     }
     normalizeAlignedLines(input) {
         const en = input.enLines.map((x) => String(x ?? '').trim());
@@ -257,20 +258,21 @@ let OCRService = OCRService_1 = class OCRService {
                                     '   - 严禁包含独立的单词对照。\n' +
                                     '   - en: 纯英文句子；zh: 纯中文翻译。\n' +
                                     '\n' +
-                                    '3. **wordPairs**: 从文本中提取【独立的单词】及其中文对照。\n' +
+                                    '3. **wordPairs**: 从文本中提取【独立的单词】及其中文对照，并给出单词原形（lemma）。\n' +
                                     '   - 必须是独立的单词或短语（如词汇表、标注的关键词）。\n' +
-                                    '   - en: 纯英文单词；zh: 纯中文对照。\n' +
+                                    '   - en: 纯英文单词；zh: 纯中文对照；lemma: 该英文单词的纯单词原形（小写，不要词性/解释）。\n' +
                                     '\n' +
                                     '请以 JSON 格式返回结果：\n' +
                                     '{\n' +
                                     '  "originalText": "...",\n' +
                                     '  "sentencePairs": [{ "en": "...", "zh": "..." }],\n' +
-                                    '  "wordPairs": [{ "en": "...", "zh": "..." }]\n' +
+                                    '  "wordPairs": [{ "en": "...", "zh": "...", "lemma": "..." }]\n' +
                                     '}\n' +
                                     '\n' +
                                     '注意：\n' +
                                     '- 严禁在 en 字段包含中文，严禁在 zh 字段包含英文。\n' +
                                     '- 严禁包含音标/IPA（如 /ˈ.../ 等）或词性标注（如 n., v. 等）。\n' +
+                                    '- wordPairs 中的 lemma 必须为纯英文单词原形（小写），不包含任何词性/解释。\n' +
                                     '- 如果图片中只有句子或只有单词，请将另一个数组设为空 []。\n' +
                                     '- 输出必须是合法 JSON，不要有任何 Markdown 标记。',
                             },
@@ -321,8 +323,9 @@ let OCRService = OCRService_1 = class OCRService {
                     try {
                         const en = this.coercePairText(item.en, `${label}[${idx}].en`).trim();
                         const zh = this.coercePairText(item.zh, `${label}[${idx}].zh`).trim();
+                        const lemma = typeof item.lemma === 'string' ? item.lemma.trim().toLowerCase() : undefined;
                         if (en && zh) {
-                            result.push({ en, zh });
+                            result.push({ en, zh, lemma });
                         }
                     }
                     catch (e) {
@@ -378,31 +381,31 @@ let OCRService = OCRService_1 = class OCRService {
             if (zhLines.length !== enLines.length) {
                 throw new Error(`千问 OCR zhLines/enLines 长度不一致：zh=${zhLines.length}, en=${enLines.length}`);
             }
-            const validateOrThrow = (z, e) => {
+            const collectValidationIssues = (z, e) => {
+                const issues = [];
                 for (let i = 0; i < z.length; i++) {
                     const zh = z[i] || '';
                     const en = e[i] || '';
-                    if (this.containsLatin(zh)) {
-                        throw new Error(`第 ${i + 1} 行 zhLines 含英文：${zh}`);
+                    if (/^[A-Za-z0-9\s.,!?'"-]+$/.test(zh) && zh.trim().toLowerCase() !== en.trim().toLowerCase()) {
+                        issues.push(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
                     }
                     if (this.containsIpaLike(zh)) {
-                        throw new Error(`第 ${i + 1} 行 zhLines 含音标/IPA：${zh}`);
+                        issues.push(`第 ${i + 1} 行 zhLines 含音标/IPA：${zh}`);
                     }
                     if (this.containsChinese(en)) {
-                        throw new Error(`第 ${i + 1} 行 enLines 含中文：${en}`);
+                        issues.push(`第 ${i + 1} 行 enLines 含中文：${en}`);
                     }
                     if (!this.isMostlyAsciiEnglish(en)) {
-                        throw new Error(`第 ${i + 1} 行 enLines 含非 ASCII 字符：${en}`);
+                        issues.push(`第 ${i + 1} 行 enLines 含非 ASCII 字符：${en}`);
                     }
                     if (this.containsIpaLike(en)) {
-                        throw new Error(`第 ${i + 1} 行 enLines 含音标/IPA：${en}`);
+                        issues.push(`第 ${i + 1} 行 enLines 含音标/IPA：${en}`);
                     }
                 }
+                return issues;
             };
-            try {
-                validateOrThrow(zhLines, enLines);
-            }
-            catch (e) {
+            const initialIssues = collectValidationIssues(zhLines, enLines);
+            if (initialIssues.length > 0) {
                 const retryCompletion = await client.chat.completions.create({
                     model: config.vlModel || 'qwen3-vl-flash',
                     messages: [
@@ -417,7 +420,7 @@ let OCRService = OCRService_1 = class OCRService {
                                 },
                                 {
                                     type: 'text',
-                                    text: this.buildRetryPrompt(this.getErrorMessage(e)),
+                                    text: this.buildRetryPrompt(initialIssues.join('\n')),
                                 },
                             ],
                         },
@@ -481,17 +484,24 @@ let OCRService = OCRService_1 = class OCRService {
                 if (zhLines2.length !== enLines2.length) {
                     throw new Error(`千问 OCR 重试 zhLines/enLines 长度不一致：zh=${zhLines2.length}, en=${enLines2.length}`);
                 }
-                validateOrThrow(zhLines2, enLines2);
+                const retryIssues = collectValidationIssues(zhLines2, enLines2);
                 return {
                     originalText: originalText2,
                     chineseText: zhLines2.join('\n'),
                     englishText: enLines2.join('\n'),
+                    wordPairs: wordPairs2.map(p => ({ en: p.en, zh: p.zh, lemma: p.lemma })),
+                    hasValidationIssues: retryIssues.length > 0,
+                    validationIssues: retryIssues,
                 };
             }
+            const issues = collectValidationIssues(zhLines, enLines);
             const result = {
                 originalText,
                 chineseText: zhLines.join('\n'),
                 englishText: enLines.join('\n'),
+                wordPairs: wordPairs.map(p => ({ en: p.en, zh: p.zh, lemma: p.lemma })),
+                hasValidationIssues: issues.length > 0,
+                validationIssues: issues,
             };
             this.logger.log('=== 最终返回的数据 ===');
             this.logger.log(`originalText 长度: ${result.originalText.length}`);
@@ -650,8 +660,9 @@ ${newEnglishLines.map((line, i) => `[${i + 1}] ${line}`).join('\n')}
                 for (let i = 0; i < z.length; i++) {
                     const zh = z[i] || '';
                     const en = e[i] || '';
-                    if (this.containsLatin(zh)) {
-                        throw new Error(`第 ${i + 1} 行 zhLines 含英文：${zh}`);
+                    if (/^[A-Za-z0-9\s.,!?"'\-()\[\]{}:;\/\\]+$/.test(zh) &&
+                        zh.trim().toLowerCase() !== en.trim().toLowerCase()) {
+                        throw new Error(`第 ${i + 1} 行 zhLines 看起来全是英文：${zh}`);
                     }
                     if (this.containsIpaLike(zh)) {
                         throw new Error(`第 ${i + 1} 行 zhLines 含音标/IPA：${zh}`);

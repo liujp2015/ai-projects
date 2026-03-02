@@ -21,17 +21,28 @@ function ReviewPage() {
     const [submitting, setSaving] = (0, react_1.useState)(false);
     const [error, setError] = (0, react_1.useState)(null);
     const [playingText, setPlayingText] = (0, react_1.useState)(null);
-    const playAudio = (text) => {
+    const playAudio = async (text) => {
         if (playingText === text)
             return;
+        if (!text || !text.trim())
+            return;
         setPlayingText(text);
-        const audio = new Audio((0, api_1.getTTSUrl)(text));
-        audio.onended = () => setPlayingText(null);
-        audio.onerror = () => {
-            alert('音频播放失败');
+        try {
+            const audio = new Audio((0, api_1.getTTSUrl)(text));
+            audio.onerror = (e) => {
+                console.error('Audio playback error:', e);
+                setPlayingText(null);
+            };
+            audio.onended = () => setPlayingText(null);
+            await audio.play().catch((err) => {
+                console.error('Audio play failed:', err);
+                setPlayingText(null);
+            });
+        }
+        catch (err) {
+            console.error('Failed to create audio:', err);
             setPlayingText(null);
-        };
-        audio.play();
+        }
     };
     (0, react_1.useEffect)(() => {
         const loadQueue = async () => {

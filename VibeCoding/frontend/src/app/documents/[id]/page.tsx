@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { fetchDocument, fetchDocumentTranslation, fetchQuestionBank, generateQuestionBank, DocumentDetail, DocumentTranslation, ExerciseQuestion, lookupWord, WordDefinition, translateMissingSentences, translateAlignRebuild, upsertUserWord, deleteUserWord, fetchUserWords, UserWord, getTTSUrl, validateSentence, AIValidationResult, appendText, appendImages, extractWordsFromDocument, fetchExtractedWords, ExtractedWord, generateWordQuiz, fetchWordQuizQuestions, WordQuizQuestion, importReviewCards, fetchReviewSummary, exportDocumentLemmas, backfillDocumentLemmas, updateAlignedWordPair } from '@/lib/api';
+import { fetchDocument, fetchDocumentTranslation, fetchQuestionBank, generateQuestionBank, DocumentDetail, DocumentTranslation, ExerciseQuestion, lookupWord, WordDefinition, translateMissingSentences, translateAlignRebuild, upsertUserWord, deleteUserWord, fetchUserWords, UserWord, getTTSUrl, validateSentence, AIValidationResult, appendText, appendImages, extractWordsFromDocument, fetchExtractedWords, ExtractedWord, generateWordQuiz, fetchWordQuizQuestions, WordQuizQuestion, importReviewCards, fetchReviewSummary, exportDocumentLemmas, backfillDocumentLemmas, updateAlignedWordPair, generateSentencePatternTraining, SentencePatternTrainingItem, fetchSentencePatternTrainingHistory, SentencePatternTrainingHistoryItem } from '@/lib/api';
 import Link from 'next/link';
 
 const isWordToken = (token: string) => /^[a-zA-Z0-9'-]+$/.test(token);
@@ -35,6 +35,15 @@ const SCENARIOS = [
   { id: 'travel', label: '旅游出行', icon: '✈️' },
   { id: 'business', label: '商务会议', icon: '🤝' },
   { id: 'academic', label: '学术写作', icon: '🎓' },
+];
+
+const TRAINING_SCENARIO_CHIPS = [
+  '技术评审',
+  '产品讨论',
+  '工作汇报',
+  '面试沟通',
+  '课堂表达',
+  '旅行交流',
 ];
 
 export default function DocumentDetailPage() {
@@ -76,6 +85,15 @@ export default function DocumentDetailPage() {
 
   // 全文测试状态
   const [showTest, setShowTest] = useState(false);
+
+  // 句型训练状态
+  const [trainingTargetSentence, setTrainingTargetSentence] = useState<string | null>(null);
+  const [trainingScenarioInput, setTrainingScenarioInput] = useState('');
+  const [trainingLoading, setTrainingLoading] = useState(false);
+  const [trainingResults, setTrainingResults] = useState<SentencePatternTrainingItem[]>([]);
+  const [trainingHistory, setTrainingHistory] = useState<SentencePatternTrainingHistoryItem[]>([]);
+  const [trainingHistoryLoading, setTrainingHistoryLoading] = useState(false);
+  const [trainingError, setTrainingError] = useState<string | null>(null);
   const [testQuestions, setTestQuestions] = useState<ExerciseQuestion[]>([]);
   const [currentTestIndex, setCurrentTestIndex] = useState(0);
   const [testUserAnswer, setTestUserAnswer] = useState<string[]>([]); // 已弃用，改用 testScrambleIndices
@@ -184,6 +202,68 @@ export default function DocumentDetailPage() {
     } finally {
       setGeneratingWordQuiz(false);
     }
+  };
+
+  const openSentenceTraining = async (sentence: string) => {
+    setTrainingTargetSentence(sentence);
+    setTrainingScenarioInput('');
+    setTrainingResults([]);
+    setTrainingError(null);
+
+    try {
+      setTrainingHistoryLoading(true);
+      const historyRes = await fetchSentencePatternTrainingHistory({
+        documentId: id as string,
+        sentence,
+        limit: 20,
+      });
+      setTrainingHistory(historyRes.items || []);
+    } catch {
+      setTrainingHistory([]);
+    } finally {
+      setTrainingHistoryLoading(false);
+    }
+  };
+
+  const closeSentenceTraining = () => {
+    setTrainingTargetSentence(null);
+    setTrainingScenarioInput('');
+    setTrainingResults([]);
+    setTrainingHistory([]);
+    setTrainingError(null);
+  };
+
+  const submitSentenceTraining = async () => {
+    if (!trainingTargetSentence || !trainingScenarioInput.trim() || trainingLoading) {
+      return;
+    }
+
+    try {
+      setTrainingLoading(true);
+      setTrainingError(null);
+      const res = await generateSentencePatternTraining(
+        trainingTargetSentence,
+        trainingScenarioInput.trim(),
+        id as string,
+      );
+      setTrainingResults(res.items || []);
+
+      const historyRes = await fetchSentencePatternTrainingHistory({
+        documentId: id as string,
+        sentence: trainingTargetSentence,
+        limit: 20,
+      });
+      setTrainingHistory(historyRes.items || []);
+    } catch (err) {
+      setTrainingError((err as Error).message || '句型训练生成失败');
+      setTrainingResults([]);
+    } finally {
+      setTrainingLoading(false);
+    }
+  };
+
+  const rerunSentenceTraining = async () => {
+    await submitSentenceTraining();
   };
 
   const startWordQuiz = async () => {
@@ -944,9 +1024,17 @@ export default function DocumentDetailPage() {
                               if (sentences.length === 0) return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到完整句子对照</div>;
 
                               return sentences.map((item, idx) => (
-                                <div key={idx} className="grid grid-cols-2 gap-0 hover:bg-gray-50 transition-colors">
+                                <div key={idx} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-0 hover:bg-gray-50 transition-colors">
                                   <div className="p-4 text-sm text-gray-800 leading-relaxed border-r border-gray-100 whitespace-pre-wrap">{item.zh}</div>
-                                  <div className="p-4 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-medium">{item.en}</div>
+                                  <div className="p-4 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-medium border-r border-gray-100">{item.en}</div>
+                                  <div className="p-3 flex items-center justify-center">
+                                    <button
+                                      onClick={() => openSentenceTraining(item.en)}
+                                      className="px-3 py-2 text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-xl hover:bg-indigo-100 transition-colors"
+                                    >
+                                      句子训练
+                                    </button>
+                                  </div>
                                 </div>
                               ));
                             })()}
@@ -1437,8 +1525,117 @@ export default function DocumentDetailPage() {
               )}
             </div>
           )}
+
         </main>
       </div>
+
+      {trainingTargetSentence && (
+        <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="text-base font-bold text-gray-900">同句型场景训练</h3>
+              <button onClick={closeSentenceTraining} className="text-sm text-gray-500 hover:text-gray-700">关闭</button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div>
+                <p className="text-xs text-gray-400 mb-2">原句</p>
+                <div className="p-3 rounded-xl bg-gray-50 text-sm text-gray-800">{trainingTargetSentence}</div>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-2">场景快捷选项</label>
+                  <div className="flex flex-wrap gap-2">
+                    {TRAINING_SCENARIO_CHIPS.map((chip) => (
+                      <button
+                        key={chip}
+                        type="button"
+                        onClick={() => setTrainingScenarioInput(chip)}
+                        className={`px-3 py-1.5 text-xs rounded-full border transition-colors ${
+                          trainingScenarioInput === chip
+                            ? 'bg-indigo-100 border-indigo-300 text-indigo-700'
+                            : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                        }`}
+                      >
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3 items-end">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-2">输入场景（可自由输入）</label>
+                    <input
+                      value={trainingScenarioInput}
+                      onChange={(e) => setTrainingScenarioInput(e.target.value)}
+                      placeholder="例如：软件团队技术评审"
+                      className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+                  <button
+                    onClick={submitSentenceTraining}
+                    disabled={trainingLoading || !trainingScenarioInput.trim()}
+                    className="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {trainingLoading ? '生成中...' : '开始训练'}
+                  </button>
+                  <button
+                    onClick={rerunSentenceTraining}
+                    disabled={trainingLoading || !trainingScenarioInput.trim()}
+                    className="px-5 py-2.5 text-sm font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-xl hover:bg-indigo-100 disabled:opacity-50"
+                  >
+                    再来一组
+                  </button>
+                </div>
+              </div>
+
+              {trainingError && (
+                <div className="p-3 rounded-xl bg-red-50 border border-red-100 text-sm text-red-600">{trainingError}</div>
+              )}
+
+              {trainingResults.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  <p className="text-xs font-bold text-gray-500">本次生成结果</p>
+                  {trainingResults.map((item, idx) => (
+                    <div key={`${item.en}-${idx}`} className="rounded-xl border border-gray-100 overflow-hidden">
+                      <div className="px-4 py-3 text-sm font-medium text-gray-900 bg-white">{item.en}</div>
+                      <div className="px-4 py-3 text-sm text-gray-700 bg-gray-50 border-t border-gray-100">{item.zh}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-gray-100 space-y-2 max-h-56 overflow-y-auto">
+                <p className="text-xs font-bold text-gray-500">历史记录</p>
+                {trainingHistoryLoading ? (
+                  <p className="text-xs text-gray-400">加载历史中...</p>
+                ) : trainingHistory.length === 0 ? (
+                  <p className="text-xs text-gray-400">暂无历史记录</p>
+                ) : (
+                  trainingHistory.map((record) => (
+                    <div key={record.id} className="rounded-lg border border-gray-100 p-3 bg-gray-50">
+                      <div className="text-[11px] text-gray-500 mb-1">场景：{record.scenario}</div>
+                      <div className="space-y-1">
+                        {(record.items || []).map((it, i) => (
+                          <div key={`${record.id}-${i}`} className="text-xs text-gray-700">
+                            {i + 1}. {it.en}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {!trainingLoading && trainingResults.length === 0 && !trainingError && (
+                <p className="text-xs text-gray-400">请输入场景后生成，系统会尽量返回 3 句；不足时返回可生成的句子数量。</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Side Panel: Word Card */}
       <aside className={`w-full md:w-[380px] bg-gray-50/50 p-6 transition-all border-t md:border-t-0 ${selectedWord ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none md:translate-y-0'}`}>

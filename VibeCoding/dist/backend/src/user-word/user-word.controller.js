@@ -41,6 +41,9 @@ let UserWordController = class UserWordController {
     async updateStatus(word, status) {
         return this.userWordService.updateStatus(word, status);
     }
+    async updateCategory(word, category) {
+        return this.userWordService.updateCategory(word, category);
+    }
     async remove(word) {
         return this.userWordService.remove(word);
     }
@@ -98,6 +101,14 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], UserWordController.prototype, "updateStatus", null);
+__decorate([
+    (0, common_1.Patch)(':word/category'),
+    __param(0, (0, common_1.Param)('word')),
+    __param(1, (0, common_1.Body)('category')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], UserWordController.prototype, "updateCategory", null);
 __decorate([
     (0, common_1.Delete)(':word'),
     __param(0, (0, common_1.Param)('word')),

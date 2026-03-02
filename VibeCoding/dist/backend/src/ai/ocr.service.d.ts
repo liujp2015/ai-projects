@@ -22,6 +22,13 @@ export declare class OCRService {
         originalText: string;
         chineseText: string;
         englishText: string;
+        wordPairs?: Array<{
+            en: string;
+            zh: string;
+            lemma?: string;
+        }>;
+        hasValidationIssues?: boolean;
+        validationIssues?: string[];
     }>;
     private localOCR;
     private qwenOCR;
@@ -33,5 +40,10 @@ export declare class OCRService {
         originalText: string;
         chineseText: string;
         englishText: string;
+        wordPairs?: Array<{
+            en: string;
+            zh: string;
+            lemma?: string;
+        }>;
     }>;
 }

@@ -19,7 +19,9 @@ function UserWordsPage() {
     const [loading, setLoading] = (0, react_1.useState)(true);
     const [error, setError] = (0, react_1.useState)(null);
     const [updatingWord, setUpdatingWord] = (0, react_1.useState)(null);
+    const [deletingWord, setDeletingWord] = (0, react_1.useState)(null);
     const [sortBy, setSortBy] = (0, react_1.useState)('time');
+    const [selectedCategory, setSelectedCategory] = (0, react_1.useState)('all');
     const load = async () => {
         try {
             setLoading(true);
@@ -38,14 +40,39 @@ function UserWordsPage() {
         load();
     }, []);
     const sortedItems = (0, react_1.useMemo)(() => {
-        const result = [...items];
+        let result = [...items];
+        if (selectedCategory !== 'all') {
+            if (selectedCategory === '未分类') {
+                result = result.filter((it) => !it.category || it.category === '');
+            }
+            else {
+                result = result.filter((it) => it.category === selectedCategory);
+            }
+        }
         if (sortBy === 'alphabet') {
             return result.sort((a, b) => a.word.localeCompare(b.word));
         }
         else {
             return result.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
         }
-    }, [items, sortBy]);
+    }, [items, sortBy, selectedCategory]);
+    const categories = (0, react_1.useMemo)(() => {
+        const cats = new Set();
+        items.forEach((it) => {
+            const cat = it.category;
+            if (cat && cat.trim())
+                cats.add(cat);
+        });
+        return Array.from(cats).sort();
+    }, [items]);
+    const categoryStats = (0, react_1.useMemo)(() => {
+        const stats = {};
+        items.forEach((it) => {
+            const cat = it.category || '未分类';
+            stats[cat] = (stats[cat] || 0) + 1;
+        });
+        return stats;
+    }, [items]);
     const onChangeStatus = async (word, status) => {
         try {
             setUpdatingWord(word);
@@ -57,6 +84,22 @@ function UserWordsPage() {
         }
         finally {
             setUpdatingWord(null);
+        }
+    };
+    const onDeleteWord = async (word) => {
+        if (!confirm(`确定要删除单词 "${word}" 吗？此操作不可恢复。`)) {
+            return;
+        }
+        try {
+            setDeletingWord(word);
+            await (0, api_1.deleteUserWord)(word);
+            setItems((prev) => prev.filter((it) => it.word !== word));
+        }
+        catch (e) {
+            alert('删除失败，请稍后重试');
+        }
+        finally {
+            setDeletingWord(null);
         }
     };
     const stats = (0, react_1.useMemo)(() => {
@@ -104,15 +147,34 @@ function UserWordsPage() {
           </div>
 
           
-          <div className="flex items-center gap-4 bg-white p-2 rounded-xl shadow-sm border border-gray-100 w-fit">
-            <span className="text-xs font-bold text-gray-400 px-2">排序方式:</span>
-            <div className="flex gap-1">
-              <button onClick={() => setSortBy('time')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${sortBy === 'time' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50'}`}>
-                按时间
-              </button>
-              <button onClick={() => setSortBy('alphabet')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${sortBy === 'alphabet' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50'}`}>
-                按字母
-              </button>
+          <div className="flex flex-wrap items-center gap-4">
+            
+            <div className="flex items-center gap-4 bg-white p-2 rounded-xl shadow-sm border border-gray-100">
+              <span className="text-xs font-bold text-gray-400 px-2">分类:</span>
+              <div className="flex gap-1 flex-wrap">
+                <button onClick={() => setSelectedCategory('all')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${selectedCategory === 'all' ? 'bg-purple-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50'}`}>
+                  全部 ({items.length})
+                </button>
+                {categories.map((cat) => (<button key={cat} onClick={() => setSelectedCategory(cat)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${selectedCategory === cat ? 'bg-purple-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50'}`}>
+                    {cat} ({categoryStats[cat] || 0})
+                  </button>))}
+                {categoryStats['未分类'] && (<button onClick={() => setSelectedCategory('未分类')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${selectedCategory === '未分类' ? 'bg-purple-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50'}`}>
+                    未分类 ({categoryStats['未分类']})
+                  </button>)}
+              </div>
+            </div>
+            
+            
+            <div className="flex items-center gap-4 bg-white p-2 rounded-xl shadow-sm border border-gray-100">
+              <span className="text-xs font-bold text-gray-400 px-2">排序方式:</span>
+              <div className="flex gap-1">
+                <button onClick={() => setSortBy('time')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${sortBy === 'time' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50'}`}>
+                  按时间
+                </button>
+                <button onClick={() => setSortBy('alphabet')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${sortBy === 'alphabet' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50'}`}>
+                  按字母
+                </button>
+              </div>
             </div>
           </div>
         </header>
@@ -126,25 +188,55 @@ function UserWordsPage() {
               {sortedItems.map((it) => (<li key={it.id} className="px-4 py-4 sm:px-6">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
-                      <div className="flex items-center gap-3">
-                        <p className="text-lg font-semibold text-gray-900 truncate">{it.word}</p>
-                        {it.translation && (<span className="text-sm text-gray-700">{it.translation}</span>)}
-                      </div>
-
-                      {it.definition && (<p className="mt-1 text-sm text-gray-500 whitespace-pre-wrap">{it.definition}</p>)}
-
-                      {it.sourceSentenceId && (<p className="mt-2 text-xs text-gray-400 font-mono">
-                          sourceSentenceId: {it.sourceSentenceId}
-                        </p>)}
+                      <link_1.default href={`/user-words/${encodeURIComponent(it.word)}`} className="text-lg font-semibold text-gray-900 truncate hover:underline hover:text-blue-600 inline-block" title="点击查看单词详细解释">
+                        {it.word}
+                      </link_1.default>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <link_1.default className="text-xs font-bold px-3 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700" href={`/scene-builder?word=${encodeURIComponent(it.word)}`} title="跳转到场景造句并自动填充该单词">
+                        去场景造句
+                      </link_1.default>
+                      
+                      
+                      <label className="text-sm text-gray-500">分类</label>
+                      <select value={it.category || ''} onChange={async (e) => {
+                    const category = e.target.value || null;
+                    try {
+                        setUpdatingWord(it.word);
+                        const updated = await (0, api_1.updateUserWordCategory)(it.word, category);
+                        setItems((prev) => prev.map((item) => (item.word === it.word ? { ...item, ...updated } : item)));
+                    }
+                    catch (e) {
+                        alert('更新分类失败，请稍后重试');
+                    }
+                    finally {
+                        setUpdatingWord(null);
+                    }
+                }} disabled={updatingWord === it.word || deletingWord === it.word} className="border border-gray-300 rounded-md px-3 py-2 text-sm bg-white disabled:opacity-50 min-w-[120px]">
+                        <option value="">未分类</option>
+                        <option value="动词">动词</option>
+                        <option value="名词">名词</option>
+                        <option value="形容词">形容词</option>
+                        <option value="副词">副词</option>
+                        <option value="介词">介词</option>
+                        <option value="连词">连词</option>
+                        <option value="代词">代词</option>
+                        <option value="其他">其他</option>
+                      </select>
+                      
                       <label className="text-sm text-gray-500">状态</label>
                       <select value={it.status} onChange={(e) => onChangeStatus(it.word, e.target.value)} disabled={updatingWord === it.word} className="border border-gray-300 rounded-md px-3 py-2 text-sm bg-white disabled:opacity-50">
                         {STATUS_OPTIONS.map((s) => (<option key={s} value={s}>
                             {STATUS_LABEL[s] ?? s}
                           </option>))}
                       </select>
+                      
+                      
+                      <button onClick={() => onDeleteWord(it.word)} disabled={deletingWord === it.word} className="text-xs font-bold px-3 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50" title="删除该单词">
+                        {deletingWord === it.word ? '删除中...' : '删除'}
+                      </button>
+                      
                       {updatingWord === it.word && (<span className="text-xs text-gray-400">更新中...</span>)}
                     </div>
                   </div>

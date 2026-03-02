@@ -27,6 +27,39 @@ let AIController = class AIController {
     async qwenImagesParse(files) {
         return this.aiService.parseImagesWithQwenVL(files);
     }
+    async sentencePatternTraining(sentence, scenario, documentId) {
+        if (!sentence?.trim()) {
+            throw new common_1.BadRequestException('sentence 不能为空');
+        }
+        if (!scenario?.trim()) {
+            throw new common_1.BadRequestException('scenario 不能为空');
+        }
+        const items = await this.aiService.generateSentencePatternTraining(sentence.trim(), scenario.trim());
+        await this.aiService.saveSentencePatternTrainingHistory({
+            documentId,
+            sourceSentence: sentence.trim(),
+            scenario: scenario.trim(),
+            items,
+        });
+        return {
+            sentence: sentence.trim(),
+            scenario: scenario.trim(),
+            items,
+            count: items.length,
+        };
+    }
+    async sentencePatternTrainingHistory(documentId, sentence, limit) {
+        const parsedLimit = Number(limit);
+        const items = await this.aiService.getSentencePatternTrainingHistory({
+            documentId,
+            sourceSentence: sentence,
+            limit: Number.isFinite(parsedLimit) ? parsedLimit : 20,
+        });
+        return {
+            items,
+            count: items.length,
+        };
+    }
 };
 exports.AIController = AIController;
 __decorate([
@@ -46,6 +79,24 @@ __decorate([
     __metadata("design:paramtypes", [Array]),
     __metadata("design:returntype", Promise)
 ], AIController.prototype, "qwenImagesParse", null);
+__decorate([
+    (0, common_1.Post)('sentence-pattern-training'),
+    __param(0, (0, common_1.Body)('sentence')),
+    __param(1, (0, common_1.Body)('scenario')),
+    __param(2, (0, common_1.Body)('documentId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", Promise)
+], AIController.prototype, "sentencePatternTraining", null);
+__decorate([
+    (0, common_1.Get)('sentence-pattern-training-history'),
+    __param(0, (0, common_1.Query)('documentId')),
+    __param(1, (0, common_1.Query)('sentence')),
+    __param(2, (0, common_1.Query)('limit')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", Promise)
+], AIController.prototype, "sentencePatternTrainingHistory", null);
 exports.AIController = AIController = __decorate([
     (0, common_1.Controller)('ai'),
     __metadata("design:paramtypes", [ai_service_1.AIService])

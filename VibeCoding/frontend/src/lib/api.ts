@@ -213,12 +213,61 @@ export type AIValidationResult = {
   wordUsage: string;
 };
 
+export type SentencePatternTrainingItem = {
+  en: string;
+  zh: string;
+};
+
+export type SentencePatternTrainingResponse = {
+  sentence: string;
+  scenario: string;
+  items: SentencePatternTrainingItem[];
+  count: number;
+};
+
+export type SentencePatternTrainingHistoryItem = {
+  id: string;
+  documentId: string | null;
+  sourceSentence: string;
+  scenario: string;
+  items: SentencePatternTrainingItem[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export async function validateSentence(word: string, scenario: string, sentence: string): Promise<AIValidationResult> {
   const res = await apiFetch('/api/ai/validate-sentence', {
     method: 'POST',
     body: JSON.stringify({ word, scenario, sentence }),
   });
   if (!res.ok) throw new Error(`AI validation failed: ${res.status}`);
+  return res.json();
+}
+
+export async function generateSentencePatternTraining(
+  sentence: string,
+  scenario: string,
+  documentId?: string,
+): Promise<SentencePatternTrainingResponse> {
+  const res = await apiFetch('/api/ai/sentence-pattern-training', {
+    method: 'POST',
+    body: JSON.stringify({ sentence, scenario, documentId }),
+  });
+  if (!res.ok) throw new Error(`Sentence pattern training failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchSentencePatternTrainingHistory(
+  params: { documentId?: string; sentence?: string; limit?: number } = {},
+): Promise<{ items: SentencePatternTrainingHistoryItem[]; count: number }> {
+  const query = new URLSearchParams();
+  if (params.documentId) query.set('documentId', params.documentId);
+  if (params.sentence) query.set('sentence', params.sentence);
+  if (typeof params.limit === 'number') query.set('limit', String(params.limit));
+
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  const res = await apiFetch(`/api/ai/sentence-pattern-training-history${suffix}`);
+  if (!res.ok) throw new Error(`Fetch training history failed: ${res.status}`);
   return res.json();
 }
 

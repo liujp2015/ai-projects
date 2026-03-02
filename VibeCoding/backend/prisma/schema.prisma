@@ -284,3 +284,16 @@ model ConversationMessage {
   @@index([conversationId])
   @@index([conversationId, orderIndex])
 }
+
+model SentencePatternTrainingHistory {
+  id             String   @id @default(uuid())
+  documentId     String?
+  sourceSentence String   @db.Text
+  scenario       String
+  items          Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([documentId])
+  @@index([createdAt])
+}

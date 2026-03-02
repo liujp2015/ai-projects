@@ -3,8 +3,14 @@ import axios from 'axios';
 import OpenAI from 'openai';
 import { getDeepSeekConfig } from '../config/deepseek.config';
 import { getQwenConfig } from '../config/qwen.config';
+import { PrismaService } from '../prisma/prisma.service';
 
 export type AlignedSentencePair = {
+  en: string;
+  zh: string;
+};
+
+export type SentencePatternTrainingItem = {
   en: string;
   zh: string;
 };
@@ -13,36 +19,40 @@ export type AlignedSentencePair = {
 export class AIService {
   private readonly logger = new Logger(AIService.name);
 
+  constructor(private readonly prisma: PrismaService) {}
+
   async mergeAndDeduplicate(texts: string[]): Promise<string> {
     const config = getQwenConfig();
-    
+
     if (!config.apiKey) {
-      this.logger.warn('Qwen API Key (DASHSCOPE_API_KEY) not provided, performing simple join as fallback');
+      this.logger.warn(
+        'Qwen API Key (DASHSCOPE_API_KEY) not provided, performing simple join as fallback',
+      );
       return texts.join('\n\n');
     }
 
     this.logger.log('Calling Qwen to merge and deduplicate OCR results...');
-    
+
     try {
-      // 使用 OpenAI SDK 兼容模式
       const client = new OpenAI({
         apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        baseURL:
+          config.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       });
 
       const prompt = `
       You are an expert editor. You will be given two or more versions/parts of an English article.
       Some parts might overlap or be duplicates.
-      
+
       Task:
       1. Merge the texts into a single, coherent English article.
       2. Identify and remove any duplicate paragraphs or sentences.
       3. Maintain the original order as much as possible, but ensure the final text flows naturally.
       4. DO NOT summarize. Keep all unique information.
-      
+
       Texts to merge:
       ${texts.map((t, i) => `--- Text ${i + 1} ---\n${t}`).join('\n\n')}
-      
+
       Final Merged Article (Output only the text):
     `;
 
@@ -51,7 +61,8 @@ export class AIService {
         messages: [
           {
             role: 'system',
-            content: 'You are an expert editor who merges texts and removes duplicates.',
+            content:
+              'You are an expert editor who merges texts and removes duplicates.',
           },
           { role: 'user', content: prompt },
         ],
@@ -115,31 +126,142 @@ export class AIService {
 
       const content = response.data.choices[0].message.content;
       return JSON.parse(this.extractJsonText(content));
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`AI validation failed: ${error.message}`);
       throw new Error('AI 评估服务暂时不可用');
     }
   }
 
+  async generateSentencePatternTraining(
+    sentence: string,
+    scenario: string,
+  ): Promise<SentencePatternTrainingItem[]> {
+    const config = getQwenConfig();
+    if (!config.apiKey) {
+      throw new Error('Qwen API Key (DASHSCOPE_API_KEY) not configured');
+    }
+
+    const client = new OpenAI({
+      apiKey: config.apiKey,
+      baseURL:
+        config.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    });
+
+    const prompt = `
+你是英语句型训练助手。请基于“原句 + 用户场景”，生成同句型替换训练句。
+
+【原句】
+${sentence}
+
+【用户场景】
+${scenario}
+
+任务要求：
+1) 输出 1~3 句该场景下“高频、自然、常用”的英文句子。
+2) 必须保持原句句型骨架一致，只替换可替换成分（如名词、数量、程度词、形容词等）。
+3) 可以替换类似：
+   - 实体名词（如 JDBC template -> 其他名词）
+   - 数字/时间（如 20 years -> 7 years / 1 year）
+   - 程度方向（如 much older -> much younger）
+4) 严禁改写成不同语法结构，严禁改变句型主干。
+5) 每句给出中文翻译。
+6) 如果严格同句型高频句不足 3 句，返回可生成的数量即可。
+
+输出 JSON（不要 Markdown）：
+{
+  "items": [
+    { "en": "...", "zh": "..." }
+  ]
+}
+`;
+
+    const completion = await client.chat.completions.create({
+      model: config.textModel || 'qwen-turbo',
+      messages: [
+        {
+          role: 'system',
+          content: '你是严格遵循句型约束的英语教学助手。只输出合法 JSON。',
+        },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.4,
+      response_format: { type: 'json_object' },
+    });
+
+    const raw = String(completion.choices[0]?.message?.content ?? '').trim();
+    const jsonText = this.extractJsonText(raw);
+    const parsed = JSON.parse(jsonText) as {
+      items?: Array<{ en?: unknown; zh?: unknown }>;
+    };
+
+    const items = Array.isArray(parsed?.items) ? parsed.items : [];
+
+    return items
+      .map((item) => ({
+        en: String(item?.en ?? '').trim(),
+        zh: String(item?.zh ?? '').trim(),
+      }))
+      .filter((item) => item.en && item.zh)
+      .slice(0, 3);
+  }
+
+  async saveSentencePatternTrainingHistory(params: {
+    documentId?: string;
+    sourceSentence: string;
+    scenario: string;
+    items: SentencePatternTrainingItem[];
+  }) {
+    const { documentId, sourceSentence, scenario, items } = params;
+
+    return this.prisma.sentencePatternTrainingHistory.create({
+      data: {
+        documentId: documentId?.trim() || null,
+        sourceSentence: sourceSentence.trim(),
+        scenario: scenario.trim(),
+        items,
+      },
+    });
+  }
+
+  async getSentencePatternTrainingHistory(params: {
+    documentId?: string;
+    sourceSentence?: string;
+    limit?: number;
+  }) {
+    const { documentId, sourceSentence, limit = 20 } = params;
+
+    return this.prisma.sentencePatternTrainingHistory.findMany({
+      where: {
+        ...(documentId?.trim() ? { documentId: documentId.trim() } : {}),
+        ...(sourceSentence?.trim()
+          ? { sourceSentence: sourceSentence.trim() }
+          : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Math.max(limit, 1), 100),
+    });
+  }
+
   private extractJsonText(input: string): string {
     let text = (input ?? '').trim();
 
-    // Remove Markdown code fences like ```json ... ```
     const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
     if (fenceMatch?.[1]) {
       text = fenceMatch[1].trim();
     }
 
-    // If the model added leading/trailing commentary, try to slice the JSON array/object.
     const firstBrace = text.indexOf('[');
     const firstObj = text.indexOf('{');
     let start = -1;
-    if (firstBrace !== -1 && (firstObj === -1 || firstBrace < firstObj)) start = firstBrace;
-    if (firstObj !== -1 && (start === -1 || firstObj < start)) start = firstObj;
+    if (firstBrace !== -1 && (firstObj === -1 || firstBrace < firstObj)) {
+      start = firstBrace;
+    }
+    if (firstObj !== -1 && (start === -1 || firstObj < start)) {
+      start = firstObj;
+    }
 
     if (start > 0) text = text.slice(start).trim();
 
-    // Trim after the last closing bracket/brace.
     const lastBracket = text.lastIndexOf(']');
     const lastBrace2 = text.lastIndexOf('}');
     const end = Math.max(lastBracket, lastBrace2);
@@ -199,7 +321,9 @@ Sentences:\n${sentences.map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
     return parsed.map((x) => String(x));
   }
 
-  async extractAlignedSentencePairsFromEnglishArticle(englishArticle: string): Promise<AlignedSentencePair[]> {
+  async extractAlignedSentencePairsFromEnglishArticle(
+    englishArticle: string,
+  ): Promise<AlignedSentencePair[]> {
     const config = getDeepSeekConfig();
     if (!config.apiKey) throw new Error('DeepSeek API Key not configured');
 
@@ -268,13 +392,15 @@ ${englishArticle}
     }));
   }
 
-  async generateQuestionsForSentences(sentences: { id: string; content: string; translationZh: string }[]) {
+  async generateQuestionsForSentences(
+    sentences: { id: string; content: string; translationZh: string }[],
+  ) {
     const config = getDeepSeekConfig();
     if (!config.apiKey) throw new Error('DeepSeek API Key not configured');
 
     const prompt = `
       You are an expert English teacher. For each English sentence provided, generate exactly two types of exercise questions.
-      
+
       STRICT CONSTRAINTS:
       1. sentenceId MUST match the input exactly.
       2. scramble.promptZh MUST be EXACTLY the same as the provided "translationZh". No IPA, no part of speech, no extra text.
@@ -330,8 +456,10 @@ ${englishArticle}
 
       const content = response.data.choices[0].message.content;
       const parsed = JSON.parse(this.extractJsonText(content));
-      return Array.isArray(parsed) ? parsed : parsed.questions || Object.values(parsed)[0];
-    } catch (error) {
+      return Array.isArray(parsed)
+        ? parsed
+        : parsed.questions || Object.values(parsed)[0];
+    } catch (error: any) {
       this.logger.error(`AI question generation failed: ${error.message}`);
       throw error;
     }
@@ -449,7 +577,7 @@ STRICT OUTPUT FORMAT: Output ONLY valid JSON.
 
       const content = response.data.choices[0].message.content;
       return JSON.parse(this.extractJsonText(content));
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Advanced question generation failed: ${error.message}`);
       throw error;
     }
@@ -457,21 +585,21 @@ STRICT OUTPUT FORMAT: Output ONLY valid JSON.
 
   async parseImagesWithQwenVL(files: Express.Multer.File[]): Promise<string> {
     const config = getQwenConfig();
-    
+
     if (!config.apiKey) {
       throw new Error('Qwen API Key (DASHSCOPE_API_KEY) not configured');
     }
 
-    this.logger.log(`Parsing ${files.length} image(s) with Qwen VL using OpenAI compatible mode...`);
+    this.logger.log(
+      `Parsing ${files.length} image(s) with Qwen VL using OpenAI compatible mode...`,
+    );
 
     try {
-      // 使用 OpenAI SDK 兼容模式
       const client = new OpenAI({
         apiKey: config.apiKey,
         baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       });
 
-      // 构建消息内容：先添加文本提示，然后添加所有图片
       const content: any[] = [
         {
           type: 'text',
@@ -479,10 +607,8 @@ STRICT OUTPUT FORMAT: Output ONLY valid JSON.
         },
       ];
 
-      // 添加每张图片
       for (const file of files) {
         const base64Image = file.buffer.toString('base64');
-        // 根据文件类型确定 MIME 类型
         const mimeType = file.mimetype || 'image/jpeg';
         content.push({
           type: 'image_url',
@@ -492,7 +618,6 @@ STRICT OUTPUT FORMAT: Output ONLY valid JSON.
         });
       }
 
-      // 调用千问 VL API（使用 OpenAI 兼容模式）
       const completion = await client.chat.completions.create({
         model: config.vlModel || 'qwen3-vl-flash',
         messages: [
@@ -504,9 +629,8 @@ STRICT OUTPUT FORMAT: Output ONLY valid JSON.
         temperature: 0.1,
       });
 
-      // 解析返回结果
       const result = completion.choices[0]?.message?.content;
-      
+
       if (result) {
         return result.trim();
       }
@@ -516,7 +640,9 @@ STRICT OUTPUT FORMAT: Output ONLY valid JSON.
       this.logger.error(`Qwen VL parsing failed: ${error.message}`);
       if (error.response) {
         this.logger.error(`Qwen VL API error status: ${error.response.status}`);
-        this.logger.error(`Qwen VL API error data: ${JSON.stringify(error.response.data)}`);
+        this.logger.error(
+          `Qwen VL API error data: ${JSON.stringify(error.response.data)}`,
+        );
       } else if (error.error) {
         this.logger.error(`Qwen VL API error: ${JSON.stringify(error.error)}`);
       }
@@ -524,12 +650,17 @@ STRICT OUTPUT FORMAT: Output ONLY valid JSON.
     }
   }
 
-  /**
-   * 从句子中提取词性（名词、动词、形容词等）
-   * @param sentences 句子数组
-   * @returns 提取的词性数组，格式：{ word: string, partOfSpeech: string, translation: string, sentence: string }[]
-   */
-  async extractWordsFromSentences(sentences: string[]): Promise<Array<{ word: string; lemma: string | null; partOfSpeech: string; translation: string; sentence: string }>> {
+  async extractWordsFromSentences(
+    sentences: string[],
+  ): Promise<
+    Array<{
+      word: string;
+      lemma: string | null;
+      partOfSpeech: string;
+      translation: string;
+      sentence: string;
+    }>
+  > {
     const config = getDeepSeekConfig();
     if (!config.apiKey) throw new Error('DeepSeek API Key not configured');
 
@@ -577,7 +708,8 @@ Return ONLY a JSON object in this format:
           messages: [
             {
               role: 'system',
-              content: 'You are an expert English teacher. Extract words with parts of speech and translations. Output only valid JSON object with a "words" array.',
+              content:
+                'You are an expert English teacher. Extract words with parts of speech and translations. Output only valid JSON object with a "words" array.',
             },
             { role: 'user', content: prompt },
           ],
@@ -594,7 +726,7 @@ Return ONLY a JSON object in this format:
 
       const raw = String(response.data?.choices?.[0]?.message?.content ?? '');
       this.logger.log(`Extract words raw response: ${raw.substring(0, 500)}`);
-      
+
       const jsonText = this.extractJsonText(raw);
 
       let parsed: unknown;
@@ -605,14 +737,17 @@ Return ONLY a JSON object in this format:
         throw e;
       }
 
-      // 处理可能的格式：直接数组或包含 words 字段的对象
       let words: any[] = [];
       if (Array.isArray(parsed)) {
         words = parsed;
-      } else if (parsed && typeof parsed === 'object' && 'words' in parsed && Array.isArray((parsed as any).words)) {
+      } else if (
+        parsed &&
+        typeof parsed === 'object' &&
+        'words' in parsed &&
+        Array.isArray((parsed as any).words)
+      ) {
         words = (parsed as any).words;
       } else if (parsed && typeof parsed === 'object') {
-        // 尝试从对象中提取数组
         const keys = Object.keys(parsed);
         for (const key of keys) {
           if (Array.isArray((parsed as any)[key])) {
@@ -623,7 +758,9 @@ Return ONLY a JSON object in this format:
       }
 
       if (!Array.isArray(words)) {
-        this.logger.error(`Extract words: response is not an array. Parsed: ${JSON.stringify(parsed)}`);
+        this.logger.error(
+          `Extract words: response is not an array. Parsed: ${JSON.stringify(parsed)}`,
+        );
         return [];
       }
 
@@ -632,7 +769,6 @@ Return ONLY a JSON object in this format:
         return [];
       }
 
-      // 验证并规范化数据
       const normalizedWords = words
         .filter((w) => w && w.word && w.partOfSpeech && w.sentence)
         .map((w) => ({
@@ -643,22 +779,30 @@ Return ONLY a JSON object in this format:
           sentence: String(w.sentence).trim(),
         }));
 
-      this.logger.log(`Extracted ${normalizedWords.length} words from ${sentences.length} sentences`);
+      this.logger.log(
+        `Extracted ${normalizedWords.length} words from ${sentences.length} sentences`,
+      );
       return normalizedWords;
     } catch (error: any) {
       this.logger.error(`Extract words failed: ${error.message}`);
       if (error.response) {
         this.logger.error(`API response status: ${error.response.status}`);
-        this.logger.error(`API response data: ${JSON.stringify(error.response.data)}`);
+        this.logger.error(
+          `API response data: ${JSON.stringify(error.response.data)}`,
+        );
       }
       throw new Error(`词性提取失败: ${error.message}`);
     }
   }
 
-  /**
-   * 基于提取的单词生成单词测试题
-   */
-  async generateWordQuizQuestions(words: Array<{ word: string; translation: string; partOfSpeech: string; sentence: string }>) {
+  async generateWordQuizQuestions(
+    words: Array<{
+      word: string;
+      translation: string;
+      partOfSpeech: string;
+      sentence: string;
+    }>,
+  ) {
     const config = getDeepSeekConfig();
     if (!config.apiKey) throw new Error('DeepSeek API Key not configured');
 
@@ -708,7 +852,8 @@ Return ONLY a JSON object with a "questions" field containing an array of object
           messages: [
             {
               role: 'system',
-              content: 'You are an expert English teacher. Generate vocabulary quiz questions in JSON format.',
+              content:
+                'You are an expert English teacher. Generate vocabulary quiz questions in JSON format.',
             },
             { role: 'user', content: prompt },
           ],
@@ -732,12 +877,9 @@ Return ONLY a JSON object with a "questions" field containing an array of object
     }
   }
 
-  /**
-   * 批量获取单词原形
-   */
   async getLemmasForWords(words: string[]): Promise<Record<string, string>> {
     if (words.length === 0) return {};
-    
+
     const config = getDeepSeekConfig();
     if (!config.apiKey) throw new Error('DeepSeek API Key not configured');
 
@@ -769,7 +911,8 @@ Example Output:
           messages: [
             {
               role: 'system',
-              content: 'You are a professional linguistic expert. Output only valid JSON mapping words to their lemmas.',
+              content:
+                'You are a professional linguistic expert. Output only valid JSON mapping words to their lemmas.',
             },
             { role: 'user', content: prompt },
           ],

@@ -13,7 +13,7 @@ function Home() {
     const checkHealth = async () => {
         setLoading(true);
         try {
-            const res = await fetch('http://localhost:3001/health');
+            const res = await fetch('/api/health');
             const data = await res.json();
             setHealthStatus(data);
         }

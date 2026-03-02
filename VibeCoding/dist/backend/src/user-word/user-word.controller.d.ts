@@ -10,6 +10,7 @@ export declare class UserWordController {
         translation: string | null;
         definition: string | null;
         status: string;
+        category: string | null;
         interval: number;
         difficulty: number;
         reps: number;
@@ -24,6 +25,7 @@ export declare class UserWordController {
         translation: string | null;
         definition: string | null;
         status: string;
+        category: string | null;
         interval: number;
         difficulty: number;
         reps: number;
@@ -38,6 +40,7 @@ export declare class UserWordController {
         translation: string | null;
         definition: string | null;
         status: string;
+        category: string | null;
         interval: number;
         difficulty: number;
         reps: number;
@@ -61,18 +64,20 @@ export declare class UserWordController {
                     chineseText: string | null;
                     englishText: string | null;
                     id: string;
+                    createdAt: Date;
+                    updatedAt: Date;
                     title: string;
                     filename: string;
                     fileSize: number;
                     mimeType: string;
-                    createdAt: Date;
-                    updatedAt: Date;
+                    hasOcrValidationIssues: boolean;
+                    ocrValidationIssues: string | null;
                 };
             } & {
                 id: string;
                 content: string;
-                orderIndex: number;
                 documentId: string;
+                orderIndex: number;
             };
         } & {
             id: string;
@@ -89,6 +94,7 @@ export declare class UserWordController {
         translation: string | null;
         definition: string | null;
         status: string;
+        category: string | null;
         interval: number;
         difficulty: number;
         reps: number;
@@ -103,6 +109,7 @@ export declare class UserWordController {
         translation: string | null;
         definition: string | null;
         status: string;
+        category: string | null;
         interval: number;
         difficulty: number;
         reps: number;
@@ -117,6 +124,22 @@ export declare class UserWordController {
         translation: string | null;
         definition: string | null;
         status: string;
+        category: string | null;
+        interval: number;
+        difficulty: number;
+        reps: number;
+        nextReviewAt: Date;
+        sourceSentenceId: string | null;
+    }>;
+    updateCategory(word: string, category: string | null): Promise<{
+        id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        word: string;
+        translation: string | null;
+        definition: string | null;
+        status: string;
+        category: string | null;
         interval: number;
         difficulty: number;
         reps: number;
@@ -131,6 +154,7 @@ export declare class UserWordController {
         translation: string | null;
         definition: string | null;
         status: string;
+        category: string | null;
         interval: number;
         difficulty: number;
         reps: number;

@@ -33,6 +33,14 @@ const SCENARIOS = [
     { id: 'business', label: '商务会议', icon: '🤝' },
     { id: 'academic', label: '学术写作', icon: '🎓' },
 ];
+const TRAINING_SCENARIO_CHIPS = [
+    '技术评审',
+    '产品讨论',
+    '工作汇报',
+    '面试沟通',
+    '课堂表达',
+    '旅行交流',
+];
 function DocumentDetailPage() {
     const { id } = (0, navigation_1.useParams)();
     const searchParams = (0, navigation_1.useSearchParams)();
@@ -61,6 +69,13 @@ function DocumentDetailPage() {
     const [appendTextContent, setAppendTextContent] = (0, react_1.useState)('');
     const [appending, setAppending] = (0, react_1.useState)(false);
     const [showTest, setShowTest] = (0, react_1.useState)(false);
+    const [trainingTargetSentence, setTrainingTargetSentence] = (0, react_1.useState)(null);
+    const [trainingScenarioInput, setTrainingScenarioInput] = (0, react_1.useState)('');
+    const [trainingLoading, setTrainingLoading] = (0, react_1.useState)(false);
+    const [trainingResults, setTrainingResults] = (0, react_1.useState)([]);
+    const [trainingHistory, setTrainingHistory] = (0, react_1.useState)([]);
+    const [trainingHistoryLoading, setTrainingHistoryLoading] = (0, react_1.useState)(false);
+    const [trainingError, setTrainingError] = (0, react_1.useState)(null);
     const [testQuestions, setTestQuestions] = (0, react_1.useState)([]);
     const [currentTestIndex, setCurrentTestIndex] = (0, react_1.useState)(0);
     const [testUserAnswer, setTestUserAnswer] = (0, react_1.useState)([]);
@@ -69,6 +84,21 @@ function DocumentDetailPage() {
     const [testCompletionAnswers, setTestCompletionAnswers] = (0, react_1.useState)({});
     const [activeBlankIndex, setActiveBlankIndex] = (0, react_1.useState)(null);
     const [testResult, setTestResult] = (0, react_1.useState)(null);
+    const [showWordQuiz, setShowWordQuiz] = (0, react_1.useState)(false);
+    const [wordQuizQuestions, setWordQuizQuestions] = (0, react_1.useState)([]);
+    const [wordQuizIndex, setWordQuizIndex] = (0, react_1.useState)(0);
+    const [wordQuizSelection, setWordQuizSelection] = (0, react_1.useState)(null);
+    const [wordQuizResult, setWordQuizResult] = (0, react_1.useState)(null);
+    const [generatingWordQuiz, setGeneratingWordQuiz] = (0, react_1.useState)(false);
+    const [loadingWordQuiz, setLoadingWordQuiz] = (0, react_1.useState)(false);
+    const [extractedWords, setExtractedWords] = (0, react_1.useState)([]);
+    const [extractingWords, setExtractingWords] = (0, react_1.useState)(false);
+    const [wordsLoading, setWordsLoading] = (0, react_1.useState)(false);
+    const [selectedPartOfSpeech, setSelectedPartOfSpeech] = (0, react_1.useState)('all');
+    const [backfilling, setBackfilling] = (0, react_1.useState)(false);
+    const [reviewSummary, setReviewSummary] = (0, react_1.useState)(null);
+    const [reviewLoading, setReviewLoading] = (0, react_1.useState)(false);
+    const [importingReview, setImportingReview] = (0, react_1.useState)(false);
     const loadTranslation = async () => {
         if (!id)
             return;
@@ -112,18 +142,131 @@ function DocumentDetailPage() {
     const handleGenerateQuestions = async () => {
         if (!id || generatingQuestions)
             return;
-        const force = confirm('是否要覆盖现有题库并重新生成？\n\n如果发现题目与答案不匹配，请选择“确定”以应用最新的生成逻辑。');
+        const force = confirm('是否要覆盖现有句子题并重新生成？\n\n注意：该按钮只生成句子题；单词题请使用“生成单词测试题”。');
         try {
             setGeneratingQuestions(true);
             const res = await (0, api_1.generateQuestionBank)(id, force);
-            alert(`题库生成成功！共处理了 ${res.total} 个句子，生成了 ${res.generated} 道题目。`);
+            const failedMsg = res.failed ? `，失败 ${res.failed} 个` : '';
+            const skippedWordMsg = res.skippedWordPairs
+                ? `\n已跳过 ${res.skippedWordPairs} 条单词题（请点“生成单词测试题”单独生成）`
+                : '';
+            alert(`句子题库生成成功！共生成 ${res.generated} 道句子题${failedMsg}。${skippedWordMsg}`);
         }
         catch (err) {
-            alert('题库生成失败，请检查后端配置或 DeepSeek API 额度');
+            console.error('[handleGenerateQuestions] Error:', err);
+            const errorMsg = err?.message || '未知错误';
+            alert(`题库生成失败：${errorMsg}\n\n请检查后端控制台日志获取详细信息。`);
         }
         finally {
             setGeneratingQuestions(false);
         }
+    };
+    const handleGenerateWordQuiz = async () => {
+        if (!id || generatingWordQuiz)
+            return;
+        const force = confirm('是否要覆盖现有单词测试题并重新生成？');
+        try {
+            setGeneratingWordQuiz(true);
+            const res = await (0, api_1.generateWordQuiz)(id, force);
+            alert(`单词测试题生成完成！共生成 ${res.total} 道题。`);
+        }
+        catch (err) {
+            alert('单词测试题生成失败：' + err.message);
+        }
+        finally {
+            setGeneratingWordQuiz(false);
+        }
+    };
+    const openSentenceTraining = async (sentence) => {
+        setTrainingTargetSentence(sentence);
+        setTrainingScenarioInput('');
+        setTrainingResults([]);
+        setTrainingError(null);
+        try {
+            setTrainingHistoryLoading(true);
+            const historyRes = await (0, api_1.fetchSentencePatternTrainingHistory)({
+                documentId: id,
+                sentence,
+                limit: 20,
+            });
+            setTrainingHistory(historyRes.items || []);
+        }
+        catch {
+            setTrainingHistory([]);
+        }
+        finally {
+            setTrainingHistoryLoading(false);
+        }
+    };
+    const closeSentenceTraining = () => {
+        setTrainingTargetSentence(null);
+        setTrainingScenarioInput('');
+        setTrainingResults([]);
+        setTrainingHistory([]);
+        setTrainingError(null);
+    };
+    const submitSentenceTraining = async () => {
+        if (!trainingTargetSentence || !trainingScenarioInput.trim() || trainingLoading) {
+            return;
+        }
+        try {
+            setTrainingLoading(true);
+            setTrainingError(null);
+            const res = await (0, api_1.generateSentencePatternTraining)(trainingTargetSentence, trainingScenarioInput.trim(), id);
+            setTrainingResults(res.items || []);
+            const historyRes = await (0, api_1.fetchSentencePatternTrainingHistory)({
+                documentId: id,
+                sentence: trainingTargetSentence,
+                limit: 20,
+            });
+            setTrainingHistory(historyRes.items || []);
+        }
+        catch (err) {
+            setTrainingError(err.message || '句型训练生成失败');
+            setTrainingResults([]);
+        }
+        finally {
+            setTrainingLoading(false);
+        }
+    };
+    const rerunSentenceTraining = async () => {
+        await submitSentenceTraining();
+    };
+    const startWordQuiz = async () => {
+        if (!id)
+            return;
+        try {
+            setLoadingWordQuiz(true);
+            const qs = await (0, api_1.fetchWordQuizQuestions)(id);
+            if (!qs.length) {
+                alert('该文档尚未生成单词测试题，请先点击“生成句子单词测试题（DeepSeek）”。');
+                return;
+            }
+            setWordQuizQuestions(qs);
+            setWordQuizIndex(0);
+            setWordQuizSelection(null);
+            setWordQuizResult(null);
+            setShowWordQuiz(true);
+        }
+        catch (err) {
+            alert('无法获取单词测试题，请检查后端连接');
+        }
+        finally {
+            setLoadingWordQuiz(false);
+        }
+    };
+    const currentWordQuiz = wordQuizQuestions[wordQuizIndex];
+    const checkWordQuizAnswer = () => {
+        if (!currentWordQuiz)
+            return;
+        const sel = wordQuizSelection;
+        if (!sel)
+            return;
+        const isCorrect = sel.trim().toLowerCase() === String(currentWordQuiz.answer).trim().toLowerCase();
+        setWordQuizResult({
+            isCorrect,
+            message: isCorrect ? '回答正确！' : `正确答案：${currentWordQuiz.answer}`,
+        });
     };
     const startTest = async () => {
         if (!id)
@@ -132,7 +275,7 @@ function DocumentDetailPage() {
             setLoading(true);
             const questions = await (0, api_1.fetchQuestionBank)(id);
             if (questions.length === 0) {
-                alert('该文档尚未生成题库，请先点击“生成题库（DeepSeek）”按钮。');
+                alert('该文档尚未生成句子题，请先点击“生成句子题库”。单词题请点击“生成单词测试题”。');
                 return;
             }
             setTestQuestions(questions);
@@ -186,9 +329,103 @@ function DocumentDetailPage() {
         setTestResult({ isCorrect, message });
     };
     (0, react_1.useEffect)(() => {
-        if (viewTab === 'translation')
+        if (viewTab === 'translation') {
             loadTranslation();
+            loadExtractedWords();
+            loadReviewSummary();
+        }
     }, [viewTab, id]);
+    const loadExtractedWords = async () => {
+        if (!id)
+            return;
+        try {
+            setWordsLoading(true);
+            const words = await (0, api_1.fetchExtractedWords)(id, selectedPartOfSpeech === 'all' ? undefined : selectedPartOfSpeech);
+            setExtractedWords(words);
+        }
+        catch (err) {
+            console.error('Failed to load extracted words', err);
+        }
+        finally {
+            setWordsLoading(false);
+        }
+    };
+    const loadReviewSummary = async () => {
+        if (!id)
+            return;
+        try {
+            setReviewLoading(true);
+            const summary = await (0, api_1.fetchReviewSummary)(id);
+            setReviewSummary(summary);
+        }
+        catch (err) {
+            console.warn('Failed to load review summary', err);
+            setReviewSummary(null);
+        }
+        finally {
+            setReviewLoading(false);
+        }
+    };
+    const handleImportReviewCards = async () => {
+        if (!id || importingReview)
+            return;
+        try {
+            setImportingReview(true);
+            const res = await (0, api_1.importReviewCards)(id);
+            await Promise.all([
+                loadReviewSummary(),
+                (0, api_1.fetchDocument)(id).then(setDoc),
+            ]);
+            alert(`导入完成：\n总数 ${res.total}\n新增 ${res.inserted}\n更新 ${res.updated}\n跳过 ${res.skipped}` +
+                (typeof res.posSynced === 'number' ? `\n词汇对照表词性同步 ${res.posSynced} 个` : '') +
+                (res.message ? `\n\n提示：${res.message}` : ''));
+        }
+        catch (err) {
+            alert('导入失败，请检查后端连接：' + err.message);
+        }
+        finally {
+            setImportingReview(false);
+        }
+    };
+    const handleExtractWords = async () => {
+        if (!id || extractingWords)
+            return;
+        try {
+            setExtractingWords(true);
+            await (0, api_1.extractWordsFromDocument)(id);
+            await loadExtractedWords();
+            alert('词性提取完成！');
+        }
+        catch (err) {
+            alert('词性提取失败：' + err.message);
+        }
+        finally {
+            setExtractingWords(false);
+        }
+    };
+    (0, react_1.useEffect)(() => {
+        if (viewTab === 'translation') {
+            loadExtractedWords();
+        }
+    }, [selectedPartOfSpeech, viewTab, id]);
+    const handleBackfillLemmas = async () => {
+        if (!id || backfilling)
+            return;
+        try {
+            setBackfilling(true);
+            const res = await (0, api_1.backfillDocumentLemmas)(id);
+            alert(res.message);
+            const docData = await (0, api_1.fetchDocument)(id);
+            setDoc(docData);
+            await loadExtractedWords();
+        }
+        catch (err) {
+            alert('补全原形失败：' + err.message);
+        }
+        finally {
+            setBackfilling(false);
+        }
+    };
     const handleAppendText = async () => {
         if (!id || !appendTextContent.trim() || appending)
             return;
@@ -267,17 +504,28 @@ function DocumentDetailPage() {
             }
         }
     };
-    const playAudio = (text) => {
+    const playAudio = async (text) => {
         if (playingText === text)
             return;
+        if (!text || !text.trim())
+            return;
         setPlayingText(text);
-        const audio = new Audio((0, api_1.getTTSUrl)(text));
-        audio.onended = () => setPlayingText(null);
-        audio.onerror = () => {
-            alert('音频播放失败');
+        try {
+            const audio = new Audio((0, api_1.getTTSUrl)(text));
+            audio.onerror = (e) => {
+                console.error('Audio playback error:', e);
+                setPlayingText(null);
+            };
+            audio.onended = () => setPlayingText(null);
+            await audio.play().catch((err) => {
+                console.error('Audio play failed:', err);
+                setPlayingText(null);
+            });
+        }
+        catch (err) {
+            console.error('Failed to create audio:', err);
             setPlayingText(null);
-        };
-        audio.play();
+        }
     };
     (0, react_1.useEffect)(() => {
         if (!id)
@@ -398,26 +646,30 @@ function DocumentDetailPage() {
     return (<div className="min-h-screen bg-white flex flex-col md:flex-row">
       
       <div className="flex-1 overflow-auto border-r border-gray-100">
-        <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <link_1.default href="/documents" className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+        <header className="sticky top-0 z-20 bg-white/80 backdrop-blur border-b border-gray-200 px-4 md:px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3 md:gap-4 overflow-hidden">
+            <link_1.default href="/documents" className="p-2 hover:bg-gray-100 rounded-full transition-colors flex-shrink-0">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
             </link_1.default>
-            <div className="flex flex-col">
-            <h1 className="text-lg font-medium text-gray-900 truncate max-w-[200px] sm:max-w-md">
+            <div className="flex flex-col overflow-hidden">
+              <h1 className="text-base md:text-lg font-medium text-gray-900 truncate">
               {doc.title}
             </h1>
+              {doc.hasOcrValidationIssues && (<div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 max-w-3xl">
+                  <div className="font-semibold">OCR 识别提示：存在不满足识别条件的核心句子，已照常保存。</div>
+                  {doc.ocrValidationIssues && (<div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{doc.ocrValidationIssues}</div>)}
+                </div>)}
               <div className="flex gap-4 mt-1">
-                <button onClick={() => setViewTab('read')} className={`text-xs font-bold uppercase tracking-wider transition-colors ${viewTab === 'read' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}>
-                  阅读文章
+                <button onClick={() => setViewTab('read')} className={`text-[10px] md:text-xs font-bold uppercase tracking-wider transition-colors ${viewTab === 'read' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}>
+                  阅读
                 </button>
-                <button onClick={() => setViewTab('translation')} className={`text-xs font-bold uppercase tracking-wider transition-colors ${viewTab === 'translation' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}>
-                  中英对照
+                <button onClick={() => setViewTab('translation')} className={`text-[10px] md:text-xs font-bold uppercase tracking-wider transition-colors ${viewTab === 'translation' ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}>
+                  对照
                 </button>
               </div>
             </div>
           </div>
-          <div className="text-xs font-mono text-gray-400 px-3 py-1 bg-gray-50 rounded-full">
+          <div className="text-[10px] font-mono text-gray-400 px-2 py-0.5 bg-gray-50 rounded-full flex-shrink-0">
             {doc.mimeType.split('/')[1].toUpperCase()}
           </div>
         </header>
@@ -497,82 +749,328 @@ function DocumentDetailPage() {
                 </div>)}
             </div>
           </div>) : (<div className="space-y-8">
-              {!showTest ? (<>
-                  <div className="flex items-center justify-between bg-blue-50 p-6 rounded-3xl border border-blue-100">
+              {(!showTest && !showWordQuiz) ? (<>
+                  <div className="flex flex-col gap-4 bg-blue-50 p-4 md:p-6 rounded-2xl md:rounded-3xl border border-blue-100">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
                       <h2 className="text-blue-800 font-bold">学习内容对照</h2>
-                      <p className="text-sm text-blue-600 mt-1">
+                        <p className="text-xs md:text-sm text-blue-600 mt-1">
                         基于图片识别的结构化对照数据
                       </p>
                     </div>
-                    <div className="flex gap-3">
-                      <button onClick={handleGenerateQuestions} disabled={generatingQuestions} className="px-6 py-2 bg-indigo-600 text-white rounded-full text-sm font-bold shadow-md hover:bg-indigo-700 transition-all disabled:opacity-50">
-                        {generatingQuestions ? '生成中...' : '生成题库（DeepSeek）'}
+                      <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 md:gap-3">
+                      <button onClick={handleGenerateQuestions} disabled={generatingQuestions} className="px-3 md:px-6 py-2 bg-indigo-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-indigo-700 transition-all disabled:opacity-50">
+                          {generatingQuestions ? '生成中...' : '生成句子题库'}
                       </button>
-                      <button onClick={startTest} className="px-6 py-2 bg-black text-white rounded-full text-sm font-bold shadow-md hover:scale-105 transition-all">
-                        开始测试
+                      <button onClick={handleGenerateWordQuiz} disabled={generatingWordQuiz} className="px-3 md:px-6 py-2 bg-purple-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-purple-700 transition-all disabled:opacity-50">
+                          {generatingWordQuiz ? '生成中...' : '生成单词测试题'}
                       </button>
+                      <button onClick={startTest} className="px-3 md:px-6 py-2 bg-black text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:scale-105 transition-all">
+                          综合测试
+                        </button>
+                        <button onClick={async () => {
+                    if (!id)
+                        return;
+                    try {
+                        const txt = await (0, api_1.exportDocumentLemmas)(id);
+                        const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${doc.title || 'lemmas'}.txt`;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                    }
+                    catch (e) {
+                        alert('导出失败：' + (e?.message || e));
+                    }
+                }} className="px-3 md:px-6 py-2 bg-emerald-600 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-emerald-700 transition-all">
+                          导出原形
+                        </button>
+                        <button onClick={handleBackfillLemmas} disabled={backfilling} className="px-3 md:px-6 py-2 bg-orange-500 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-orange-600 transition-all disabled:opacity-50">
+                          {backfilling ? '同步中...' : '同步旧原形'}
+                      </button>
+                      <button onClick={startWordQuiz} disabled={loadingWordQuiz} className="px-3 md:px-6 py-2 bg-gray-900 text-white rounded-full text-xs md:text-sm font-bold shadow-md hover:bg-gray-800 transition-all disabled:opacity-50">
+                          {loadingWordQuiz ? '...' : '单词测试'}
+                      </button>
+                      </div>
+                    </div>
+
+                    
+                    <div className="pt-4 border-t border-blue-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-4">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">复习进度</span>
+                          {reviewLoading ? (<div className="h-5 w-24 bg-blue-100 animate-pulse rounded mt-1"></div>) : reviewSummary ? (<div className="flex items-center gap-3 mt-1">
+                              <div className="flex items-center gap-1" title="今日待复习">
+                                <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                                <span className="text-sm font-bold text-gray-700">{reviewSummary.dueCount}</span>
+                              </div>
+                              <div className="flex items-center gap-1" title="正在学习中">
+                                <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                                <span className="text-sm font-bold text-gray-700">{reviewSummary.learningCount}</span>
+                              </div>
+                              <div className="flex items-center gap-1" title="已掌握">
+                                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                                <span className="text-sm font-bold text-gray-700">{reviewSummary.masteredCount}</span>
+                              </div>
+                            </div>) : (<span className="text-xs text-blue-400 mt-1 italic">未导入复习卡片</span>)}
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-2">
+                        <button onClick={handleImportReviewCards} disabled={importingReview} className="flex-1 sm:flex-none px-4 py-2 bg-white border border-blue-200 text-blue-600 rounded-xl text-xs font-bold hover:bg-blue-50 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          {importingReview ? '导入中...' : '导入到复习'}
+                        </button>
+                        {reviewSummary && reviewSummary.totalCount > 0 && (<link_1.default href={`/documents/${id}/review-cards`} className="flex-1 sm:flex-none px-6 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-md hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+                            开始刷词 ({reviewSummary.dueCount})
+                          </link_1.default>)}
+                      </div>
                     </div>
                   </div>
 
-                  {translationLoading ? (<div className="py-20 text-center text-gray-400 animate-pulse">加载对照中...</div>) : (<div className="space-y-6">
+                  {translationLoading ? (<div className="py-20 text-center text-gray-400 animate-pulse">加载对照中...</div>) : (<div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                       
-                      <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-                        <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
-                          <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                            <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
-                            核心句子对照
-                          </h3>
-                        </div>
-                        <div className="grid grid-cols-2 gap-0 border-b border-gray-100 bg-gray-50/50">
-                          <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">中文句子</div>
-                          <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">English Sentence</div>
-                        </div>
-                        <div className="divide-y divide-gray-100">
-                          {(() => {
+                      <div className="lg:col-span-2 space-y-6">
+                        
+                        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+                          <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
+                            <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                              <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                              核心句子对照
+                            </h3>
+                          </div>
+                          <div className="grid grid-cols-2 gap-0 border-b border-gray-100 bg-gray-50/50">
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">中文句子</div>
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">English Sentence</div>
+                          </div>
+                          <div className="divide-y divide-gray-100">
+                            {(() => {
                         const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
                         const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
                         const sentences = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
                             .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15));
                         if (sentences.length === 0)
                             return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到完整句子对照</div>;
-                        return sentences.map((item, idx) => (<div key={idx} className="grid grid-cols-2 gap-0 hover:bg-gray-50 transition-colors">
-                                <div className="p-4 text-sm text-gray-800 leading-relaxed border-r border-gray-100 whitespace-pre-wrap">{item.zh}</div>
-                                <div className="p-4 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-medium">{item.en}</div>
-                              </div>));
+                        return sentences.map((item, idx) => (<div key={idx} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-0 hover:bg-gray-50 transition-colors">
+                                  <div className="p-4 text-sm text-gray-800 leading-relaxed border-r border-gray-100 whitespace-pre-wrap">{item.zh}</div>
+                                  <div className="p-4 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-medium border-r border-gray-100">{item.en}</div>
+                                  <div className="p-3 flex items-center justify-center">
+                                    <button onClick={() => openSentenceTraining(item.en)} className="px-3 py-2 text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-xl hover:bg-indigo-100 transition-colors">
+                                      句子训练
+                                    </button>
+                                  </div>
+                                </div>));
                     })()}
+                          </div>
                         </div>
-                      </div>
 
-                      
-                      <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-                        <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
-                          <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                            <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                            词汇对照表
-                          </h3>
-                        </div>
-                        <div className="grid grid-cols-2 gap-0 border-b border-gray-100 bg-gray-50/50">
-                          <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">中文单词</div>
-                          <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">English Word</div>
-                        </div>
-                        <div className="divide-y divide-gray-100">
-                          {(() => {
+                        
+                        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+                          <div className="p-4 bg-gray-50 border-b border-gray-100 flex flex-col gap-1">
+                            <div className="flex justify-between items-center">
+                              <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                                词汇对照表
+                              </h3>
+                            </div>
+                            <p className="text-[10px] text-gray-400">
+                              词性来自「提取词性」，按单词在句子中的用法分类（非词典原形词性）。导入或同步后会填充，用于刷词时按词性筛选。
+                            </p>
+                          </div>
+                          <div className="grid grid-cols-5 gap-0 border-b border-gray-100 bg-gray-50/50">
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest w-12">重点</div>
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">中文单词</div>
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">English Word</div>
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Lemma</div>
+                            <div className="p-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">词性</div>
+                          </div>
+                          <div className="divide-y divide-gray-100">
+                            {(() => {
+                        const posOptions = ['noun', 'verb', 'adjective', 'adverb', 'unknown'];
+                        const aligned = doc.alignedWordPairs;
+                        if (aligned && aligned.length > 0) {
+                            return aligned.map((item, idx) => (<div key={item.id || idx} className="grid grid-cols-5 gap-0 hover:bg-gray-50 transition-colors items-center">
+                                    <div className="p-4 flex justify-center">
+                                      <button onClick={async () => {
+                                    try {
+                                        await (0, api_1.updateAlignedWordPair)(item.id, { isImportant: !item.isImportant });
+                                        const updatedAligned = [...aligned];
+                                        updatedAligned[idx] = { ...item, isImportant: !item.isImportant };
+                                        setDoc({ ...doc, alignedWordPairs: updatedAligned });
+                                    }
+                                    catch (err) {
+                                        alert('更新失败');
+                                    }
+                                }} className={`transition-colors ${item.isImportant ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-400'}`} title={item.isImportant ? '取消重点' : '设为重点'}>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill={item.isImportant ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                                      </button>
+                                    </div>
+                                    <div className="p-4 text-sm text-gray-800 border-r border-gray-100">{item.zh}</div>
+                                    <div className="p-4 text-sm text-gray-900 font-bold border-r border-gray-100">{item.en}</div>
+                                    <div className="p-4 text-sm text-gray-700 font-mono border-r border-gray-100">{item.lemma || '-'}</div>
+                                    <div className="p-4 text-sm">
+                                      <select value={item.partOfSpeech?.toLowerCase() || 'unknown'} onChange={async (e) => {
+                                    const newPos = e.target.value;
+                                    try {
+                                        await (0, api_1.updateAlignedWordPair)(item.id, { partOfSpeech: newPos });
+                                        const updatedAligned = [...aligned];
+                                        updatedAligned[idx] = { ...item, partOfSpeech: newPos };
+                                        setDoc({ ...doc, alignedWordPairs: updatedAligned });
+                                    }
+                                    catch (err) {
+                                        alert('更新词性失败');
+                                    }
+                                }} className="bg-transparent border-0 text-xs font-medium uppercase text-purple-600 focus:ring-0 cursor-pointer hover:bg-purple-50 rounded px-1">
+                                        {posOptions.map(opt => (<option key={opt} value={opt}>{opt}</option>))}
+                                      </select>
+                                    </div>
+                                  </div>));
+                        }
                         const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
                         const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
                         const words = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
                             .filter(item => item.en && !(item.en.includes(' ') && item.en.length > 15));
                         if (words.length === 0)
                             return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到单词对照</div>;
-                        return words.map((item, idx) => (<div key={idx} className="grid grid-cols-2 gap-0 hover:bg-gray-50 transition-colors">
-                                <div className="p-4 text-sm text-gray-800 border-r border-gray-100">{item.zh}</div>
-                                <div className="p-4 text-sm text-gray-900 font-bold">{item.en}</div>
-                              </div>));
+                        return words.map((item, idx) => (<div key={idx} className="grid grid-cols-5 gap-0 hover:bg-gray-50 transition-colors items-center">
+                                  <div className="p-4 text-center text-gray-300">-</div>
+                                  <div className="p-4 text-sm text-gray-800 border-r border-gray-100">{item.zh}</div>
+                                  <div className="p-4 text-sm text-gray-900 font-bold border-r border-gray-100">{item.en}</div>
+                                  <div className="p-4 text-sm text-gray-700 font-mono border-r border-gray-100">-</div>
+                                  <div className="p-4 text-sm text-gray-400 italic">-</div>
+                                </div>));
                     })()}
+                          </div>
+                        </div>
+                      </div>
+
+                      
+                      <div className="lg:col-span-1">
+                        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden sticky top-24">
+                          <div className="p-4 bg-gray-50 border-b border-gray-100">
+                            <div className="flex justify-between items-center mb-4">
+                              <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
+                                句子学习
+                              </h3>
+                              <button onClick={handleExtractWords} disabled={extractingWords} className="px-3 py-1.5 text-xs font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-all disabled:opacity-50">
+                                {extractingWords ? '提取中...' : '提取词性'}
+                              </button>
+                            </div>
+                            
+                            
+                            <div className="flex gap-2 flex-wrap">
+                              {[
+                        { key: 'all', label: '全部' },
+                        { key: 'noun', label: '名词' },
+                        { key: 'verb', label: '动词' },
+                        { key: 'adjective', label: '形容词' },
+                        { key: 'adverb', label: '副词' },
+                    ].map((tab) => (<button key={tab.key} onClick={() => setSelectedPartOfSpeech(tab.key)} className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${selectedPartOfSpeech === tab.key
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                                  {tab.label}
+                                </button>))}
+                            </div>
+                          </div>
+
+                          
+                          <div className="max-h-[calc(100vh-300px)] overflow-y-auto">
+                            {wordsLoading ? (<div className="p-8 text-center text-gray-400 animate-pulse">加载中...</div>) : extractedWords.length === 0 ? (<div className="p-8 text-center text-gray-400 text-sm">
+                                {extractingWords ? '正在提取词性...' : '点击"提取词性"按钮开始学习'}
+                              </div>) : (<div className="divide-y divide-gray-100">
+                                {extractedWords.map((word) => (<div key={word.id} className="p-4 hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => handleWordClick(word.word, '')}>
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                          <span className="text-sm font-bold text-gray-900">{word.word}</span>
+                                          {word.lemma && (<span className="text-[10px] px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full font-mono">
+                                              {word.lemma}
+                                            </span>)}
+                                          <span className="text-[10px] px-2 py-0.5 bg-purple-100 text-purple-600 rounded-full uppercase">
+                                            {word.partOfSpeech}
+                                          </span>
+                                        </div>
+                                        {word.translation && (<p className="text-xs text-gray-600 mb-2">{word.translation}</p>)}
+                                        <p className="text-xs text-gray-400 italic line-clamp-2">{word.sentence}</p>
+                                      </div>
+                                    </div>
+                                  </div>))}
+                              </div>)}
+                          </div>
                         </div>
                       </div>
                     </div>)}
-                </>) : (<div className="bg-white p-10 rounded-3xl border border-gray-100 shadow-xl">
+                </>) : showWordQuiz ? (<div className="bg-white p-10 rounded-3xl border border-gray-100 shadow-xl">
+                  <header className="flex justify-between items-center mb-10">
+                    <button onClick={() => setShowWordQuiz(false)} className="text-gray-400 hover:text-gray-600 font-bold text-sm uppercase tracking-widest">
+                      退出单词测试
+                    </button>
+                    <span className="text-purple-600 font-bold">
+                      进度: {wordQuizIndex + 1} / {wordQuizQuestions.length}
+                    </span>
+                  </header>
+
+                  <div className="space-y-8">
+                    <div>
+                      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">
+                        {currentWordQuiz?.type === 'ZH_TO_EN' ? '中文提示（选英文单词）' : '英文提示（选中文意思）'}
+                      </h3>
+                      <p className="text-2xl font-medium text-gray-900 leading-relaxed">
+                        {currentWordQuiz?.prompt}
+                      </p>
+                      {currentWordQuiz?.sentenceContext && (<p className="mt-4 text-sm text-gray-500 italic bg-gray-50 p-4 rounded-2xl border border-gray-100 whitespace-pre-wrap">
+                          {currentWordQuiz.sentenceContext}
+                        </p>)}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {currentWordQuiz?.options?.map((opt, i) => (<button key={i} disabled={!!wordQuizResult} onClick={() => setWordQuizSelection(opt)} className={`p-6 rounded-2xl border-2 text-left transition-all font-bold text-lg ${wordQuizSelection === opt
+                        ? 'border-purple-500 bg-purple-50 text-purple-700 shadow-md scale-[1.02]'
+                        : 'border-gray-100 hover:border-purple-200 hover:bg-gray-50/50'}`}>
+                          <span className={`inline-block w-10 h-10 rounded-full text-center leading-10 mr-4 text-sm font-black ${wordQuizSelection === opt ? 'bg-purple-500 text-white' : 'bg-gray-100 text-gray-400'}`}>
+                            {String.fromCharCode(65 + i)}
+                          </span>
+                          {opt}
+                        </button>))}
+                    </div>
+
+                    {wordQuizResult && (<div className={`p-6 rounded-2xl ${wordQuizResult.isCorrect ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
+                        <p className="font-bold mb-1">{wordQuizResult.isCorrect ? '回答正确！' : '回答错误'}</p>
+                        <p className="text-sm opacity-80">{wordQuizResult.message}</p>
+                      </div>)}
+
+                    <div className="pt-6 border-t border-gray-100 flex gap-4">
+                      {!wordQuizResult ? (<button onClick={checkWordQuizAnswer} disabled={!wordQuizSelection} className="flex-1 py-4 bg-purple-600 text-white rounded-2xl font-bold shadow-lg hover:bg-purple-700 disabled:opacity-50 transition-all">
+                          提交判定
+                        </button>) : (<button onClick={() => {
+                        if (wordQuizIndex < wordQuizQuestions.length - 1) {
+                            setWordQuizIndex(prev => prev + 1);
+                            setWordQuizSelection(null);
+                            setWordQuizResult(null);
+                        }
+                        else {
+                            alert('单词测试完成！');
+                            setShowWordQuiz(false);
+                        }
+                    }} className="flex-1 py-4 bg-black text-white rounded-2xl font-bold shadow-lg hover:bg-gray-800 transition-all">
+                          {wordQuizIndex < wordQuizQuestions.length - 1 ? '下一题' : '完成测试'}
+                        </button>)}
+
+                      <button onClick={() => {
+                    setWordQuizSelection(null);
+                    setWordQuizResult(null);
+                }} className="px-8 py-4 border border-gray-200 rounded-2xl font-bold text-gray-500 hover:bg-gray-50">
+                        重置
+                      </button>
+                    </div>
+                  </div>
+                </div>) : (<div className="bg-white p-10 rounded-3xl border border-gray-100 shadow-xl">
                   <header className="flex justify-between items-center mb-10">
                     <button onClick={() => setShowTest(false)} className="text-gray-400 hover:text-gray-600 font-bold text-sm uppercase tracking-widest">退出测试</button>
                     <span className="text-blue-600 font-bold">进度: {currentTestIndex + 1} / {testQuestions.length}</span>
@@ -703,8 +1201,59 @@ function DocumentDetailPage() {
                   </div>
                 </div>)}
             </div>)}
+
         </main>
       </div>
+
+      {trainingTargetSentence && (<div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="text-base font-bold text-gray-900">同句型场景训练</h3>
+              <button onClick={closeSentenceTraining} className="text-sm text-gray-500 hover:text-gray-700">关闭</button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div>
+                <p className="text-xs text-gray-400 mb-2">原句</p>
+                <div className="p-3 rounded-xl bg-gray-50 text-sm text-gray-800">{trainingTargetSentence}</div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-end">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-2">输入场景（可自由输入，如：技术分享、创业路演、校园讨论）</label>
+                  <input value={trainingScenarioInput} onChange={(e) => setTrainingScenarioInput(e.target.value)} placeholder="例如：软件团队技术评审" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none"/>
+                </div>
+                <button onClick={submitSentenceTraining} disabled={trainingLoading || !trainingScenarioInput.trim()} className="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 disabled:opacity-50">
+                  {trainingLoading ? '生成中...' : '开始训练'}
+                </button>
+              </div>
+
+              {trainingError && (<div className="p-3 rounded-xl bg-red-50 border border-red-100 text-sm text-red-600">{trainingError}</div>)}
+
+              {trainingResults.length > 0 && (<div className="space-y-3 pt-2">
+                  <p className="text-xs font-bold text-gray-500">本次生成结果</p>
+                  {trainingResults.map((item, idx) => (<div key={`${item.en}-${idx}`} className="rounded-xl border border-gray-100 overflow-hidden">
+                      <div className="px-4 py-3 text-sm font-medium text-gray-900 bg-white">{item.en}</div>
+                      <div className="px-4 py-3 text-sm text-gray-700 bg-gray-50 border-t border-gray-100">{item.zh}</div>
+                    </div>))}
+                </div>)}
+
+              <div className="pt-2 border-t border-gray-100 space-y-2 max-h-56 overflow-y-auto">
+                <p className="text-xs font-bold text-gray-500">历史记录</p>
+                {trainingHistoryLoading ? (<p className="text-xs text-gray-400">加载历史中...</p>) : trainingHistory.length === 0 ? (<p className="text-xs text-gray-400">暂无历史记录</p>) : (trainingHistory.map((record) => (<div key={record.id} className="rounded-lg border border-gray-100 p-3 bg-gray-50">
+                      <div className="text-[11px] text-gray-500 mb-1">场景：{record.scenario}</div>
+                      <div className="space-y-1">
+                        {(record.items || []).map((it, i) => (<div key={`${record.id}-${i}`} className="text-xs text-gray-700">
+                            {i + 1}. {it.en}
+                          </div>))}
+                      </div>
+                    </div>)))}
+              </div>
+
+              {!trainingLoading && trainingResults.length === 0 && !trainingError && (<p className="text-xs text-gray-400">请输入场景后生成，系统会尽量返回 3 句；不足时返回可生成的句子数量。</p>)}
+            </div>
+          </div>
+        </div>)}
 
       
       <aside className={`w-full md:w-[380px] bg-gray-50/50 p-6 transition-all border-t md:border-t-0 ${selectedWord ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none md:translate-y-0'}`}>

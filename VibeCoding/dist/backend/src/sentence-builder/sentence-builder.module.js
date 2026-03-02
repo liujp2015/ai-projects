@@ -8,6 +8,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SentenceBuilderModule = void 0;
 const common_1 = require("@nestjs/common");
+const prisma_module_1 = require("../prisma/prisma.module");
 const sentence_builder_service_1 = require("./sentence-builder.service");
 const sentence_builder_controller_1 = require("./sentence-builder.controller");
 let SentenceBuilderModule = class SentenceBuilderModule {
@@ -15,6 +16,7 @@ let SentenceBuilderModule = class SentenceBuilderModule {
 exports.SentenceBuilderModule = SentenceBuilderModule;
 exports.SentenceBuilderModule = SentenceBuilderModule = __decorate([
     (0, common_1.Module)({
+        imports: [prisma_module_1.PrismaModule],
         providers: [sentence_builder_service_1.SentenceBuilderService],
         controllers: [sentence_builder_controller_1.SentenceBuilderController],
     })

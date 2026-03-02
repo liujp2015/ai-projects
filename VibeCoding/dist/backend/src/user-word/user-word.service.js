@@ -58,6 +58,12 @@ let UserWordService = class UserWordService {
             data: { status },
         });
     }
+    async updateCategory(word, category) {
+        return this.prisma.userWord.update({
+            where: { word: word.toLowerCase().trim() },
+            data: { category: category || null },
+        });
+    }
     async remove(word) {
         return this.prisma.userWord.delete({
             where: { word: word.toLowerCase().trim() },

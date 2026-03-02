@@ -5,6 +5,9 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -16,8 +19,13 @@ const axios_1 = __importDefault(require("axios"));
 const openai_1 = __importDefault(require("openai"));
 const deepseek_config_1 = require("../config/deepseek.config");
 const qwen_config_1 = require("../config/qwen.config");
+const prisma_service_1 = require("../prisma/prisma.service");
 let AIService = AIService_1 = class AIService {
+    prisma;
     logger = new common_1.Logger(AIService_1.name);
+    constructor(prisma) {
+        this.prisma = prisma;
+    }
     async mergeAndDeduplicate(texts) {
         const config = (0, qwen_config_1.getQwenConfig)();
         if (!config.apiKey) {
@@ -33,16 +41,16 @@ let AIService = AIService_1 = class AIService {
             const prompt = `
       You are an expert editor. You will be given two or more versions/parts of an English article.
       Some parts might overlap or be duplicates.
-      
+
       Task:
       1. Merge the texts into a single, coherent English article.
       2. Identify and remove any duplicate paragraphs or sentences.
       3. Maintain the original order as much as possible, but ensure the final text flows naturally.
       4. DO NOT summarize. Keep all unique information.
-      
+
       Texts to merge:
       ${texts.map((t, i) => `--- Text ${i + 1} ---\n${t}`).join('\n\n')}
-      
+
       Final Merged Article (Output only the text):
     `;
             const completion = await client.chat.completions.create({
@@ -111,6 +119,90 @@ let AIService = AIService_1 = class AIService {
             throw new Error('AI 评估服务暂时不可用');
         }
     }
+    async generateSentencePatternTraining(sentence, scenario) {
+        const config = (0, qwen_config_1.getQwenConfig)();
+        if (!config.apiKey) {
+            throw new Error('Qwen API Key (DASHSCOPE_API_KEY) not configured');
+        }
+        const client = new openai_1.default({
+            apiKey: config.apiKey,
+            baseURL: config.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        });
+        const prompt = `
+你是英语句型训练助手。请基于“原句 + 用户场景”，生成同句型替换训练句。
+
+【原句】
+${sentence}
+
+【用户场景】
+${scenario}
+
+任务要求：
+1) 输出 1~3 句该场景下“高频、自然、常用”的英文句子。
+2) 必须保持原句句型骨架一致，只替换可替换成分（如名词、数量、程度词、形容词等）。
+3) 可以替换类似：
+   - 实体名词（如 JDBC template -> 其他名词）
+   - 数字/时间（如 20 years -> 7 years / 1 year）
+   - 程度方向（如 much older -> much younger）
+4) 严禁改写成不同语法结构，严禁改变句型主干。
+5) 每句给出中文翻译。
+6) 如果严格同句型高频句不足 3 句，返回可生成的数量即可。
+
+输出 JSON（不要 Markdown）：
+{
+  "items": [
+    { "en": "...", "zh": "..." }
+  ]
+}
+`;
+        const completion = await client.chat.completions.create({
+            model: config.textModel || 'qwen-turbo',
+            messages: [
+                {
+                    role: 'system',
+                    content: '你是严格遵循句型约束的英语教学助手。只输出合法 JSON。',
+                },
+                { role: 'user', content: prompt },
+            ],
+            temperature: 0.4,
+            response_format: { type: 'json_object' },
+        });
+        const raw = String(completion.choices[0]?.message?.content ?? '').trim();
+        const jsonText = this.extractJsonText(raw);
+        const parsed = JSON.parse(jsonText);
+        const items = Array.isArray(parsed?.items) ? parsed.items : [];
+        return items
+            .map((item) => ({
+            en: String(item?.en ?? '').trim(),
+            zh: String(item?.zh ?? '').trim(),
+        }))
+            .filter((item) => item.en && item.zh)
+            .slice(0, 3);
+    }
+    async saveSentencePatternTrainingHistory(params) {
+        const { documentId, sourceSentence, scenario, items } = params;
+        return this.prisma.sentencePatternTrainingHistory.create({
+            data: {
+                documentId: documentId?.trim() || null,
+                sourceSentence: sourceSentence.trim(),
+                scenario: scenario.trim(),
+                items,
+            },
+        });
+    }
+    async getSentencePatternTrainingHistory(params) {
+        const { documentId, sourceSentence, limit = 20 } = params;
+        return this.prisma.sentencePatternTrainingHistory.findMany({
+            where: {
+                ...(documentId?.trim() ? { documentId: documentId.trim() } : {}),
+                ...(sourceSentence?.trim()
+                    ? { sourceSentence: sourceSentence.trim() }
+                    : {}),
+            },
+            orderBy: { createdAt: 'desc' },
+            take: Math.min(Math.max(limit, 1), 100),
+        });
+    }
     extractJsonText(input) {
         let text = (input ?? '').trim();
         const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
@@ -120,10 +212,12 @@ let AIService = AIService_1 = class AIService {
         const firstBrace = text.indexOf('[');
         const firstObj = text.indexOf('{');
         let start = -1;
-        if (firstBrace !== -1 && (firstObj === -1 || firstBrace < firstObj))
+        if (firstBrace !== -1 && (firstObj === -1 || firstBrace < firstObj)) {
             start = firstBrace;
-        if (firstObj !== -1 && (start === -1 || firstObj < start))
+        }
+        if (firstObj !== -1 && (start === -1 || firstObj < start)) {
             start = firstObj;
+        }
         if (start > 0)
             text = text.slice(start).trim();
         const lastBracket = text.lastIndexOf(']');
@@ -238,7 +332,7 @@ ${englishArticle}
             throw new Error('DeepSeek API Key not configured');
         const prompt = `
       You are an expert English teacher. For each English sentence provided, generate exactly two types of exercise questions.
-      
+
       STRICT CONSTRAINTS:
       1. sentenceId MUST match the input exactly.
       2. scramble.promptZh MUST be EXACTLY the same as the provided "translationZh". No IPA, no part of speech, no extra text.
@@ -287,7 +381,9 @@ ${englishArticle}
             });
             const content = response.data.choices[0].message.content;
             const parsed = JSON.parse(this.extractJsonText(content));
-            return Array.isArray(parsed) ? parsed : parsed.questions || Object.values(parsed)[0];
+            return Array.isArray(parsed)
+                ? parsed
+                : parsed.questions || Object.values(parsed)[0];
         }
         catch (error) {
             this.logger.error(`AI question generation failed: ${error.message}`);
@@ -528,7 +624,10 @@ Return ONLY a JSON object in this format:
             if (Array.isArray(parsed)) {
                 words = parsed;
             }
-            else if (parsed && typeof parsed === 'object' && 'words' in parsed && Array.isArray(parsed.words)) {
+            else if (parsed &&
+                typeof parsed === 'object' &&
+                'words' in parsed &&
+                Array.isArray(parsed.words)) {
                 words = parsed.words;
             }
             else if (parsed && typeof parsed === 'object') {
@@ -691,6 +790,7 @@ Example Output:
 };
 exports.AIService = AIService;
 exports.AIService = AIService = AIService_1 = __decorate([
-    (0, common_1.Injectable)()
+    (0, common_1.Injectable)(),
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
 ], AIService);
 //# sourceMappingURL=ai.service.js.map

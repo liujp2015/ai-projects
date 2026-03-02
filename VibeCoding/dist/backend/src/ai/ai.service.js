@@ -5,6 +5,9 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -16,8 +19,13 @@ const axios_1 = __importDefault(require("axios"));
 const openai_1 = __importDefault(require("openai"));
 const deepseek_config_1 = require("../config/deepseek.config");
 const qwen_config_1 = require("../config/qwen.config");
+const prisma_service_1 = require("../prisma/prisma.service");
 let AIService = AIService_1 = class AIService {
+    prisma;
     logger = new common_1.Logger(AIService_1.name);
+    constructor(prisma) {
+        this.prisma = prisma;
+    }
     async mergeAndDeduplicate(texts) {
         const config = (0, qwen_config_1.getQwenConfig)();
         if (!config.apiKey) {
@@ -33,16 +41,16 @@ let AIService = AIService_1 = class AIService {
             const prompt = `
       You are an expert editor. You will be given two or more versions/parts of an English article.
       Some parts might overlap or be duplicates.
-      
+
       Task:
       1. Merge the texts into a single, coherent English article.
       2. Identify and remove any duplicate paragraphs or sentences.
       3. Maintain the original order as much as possible, but ensure the final text flows naturally.
       4. DO NOT summarize. Keep all unique information.
-      
+
       Texts to merge:
       ${texts.map((t, i) => `--- Text ${i + 1} ---\n${t}`).join('\n\n')}
-      
+
       Final Merged Article (Output only the text):
     `;
             const completion = await client.chat.completions.create({
@@ -111,6 +119,90 @@ let AIService = AIService_1 = class AIService {
             throw new Error('AI 评估服务暂时不可用');
         }
     }
+    async generateSentencePatternTraining(sentence, scenario) {
+        const config = (0, qwen_config_1.getQwenConfig)();
+        if (!config.apiKey) {
+            throw new Error('Qwen API Key (DASHSCOPE_API_KEY) not configured');
+        }
+        const client = new openai_1.default({
+            apiKey: config.apiKey,
+            baseURL: config.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        });
+        const prompt = `
+你是英语句型训练助手。请基于“原句 + 用户场景”，生成同句型替换训练句。
+
+【原句】
+${sentence}
+
+【用户场景】
+${scenario}
+
+任务要求：
+1) 输出 1~3 句该场景下“高频、自然、常用”的英文句子。
+2) 必须保持原句句型骨架一致，只替换可替换成分（如名词、数量、程度词、形容词等）。
+3) 可以替换类似：
+   - 实体名词（如 JDBC template -> 其他名词）
+   - 数字/时间（如 20 years -> 7 years / 1 year）
+   - 程度方向（如 much older -> much younger）
+4) 严禁改写成不同语法结构，严禁改变句型主干。
+5) 每句给出中文翻译。
+6) 如果严格同句型高频句不足 3 句，返回可生成的数量即可。
+
+输出 JSON（不要 Markdown）：
+{
+  "items": [
+    { "en": "...", "zh": "..." }
+  ]
+}
+`;
+        const completion = await client.chat.completions.create({
+            model: config.textModel || 'qwen-turbo',
+            messages: [
+                {
+                    role: 'system',
+                    content: '你是严格遵循句型约束的英语教学助手。只输出合法 JSON。',
+                },
+                { role: 'user', content: prompt },
+            ],
+            temperature: 0.4,
+            response_format: { type: 'json_object' },
+        });
+        const raw = String(completion.choices[0]?.message?.content ?? '').trim();
+        const jsonText = this.extractJsonText(raw);
+        const parsed = JSON.parse(jsonText);
+        const items = Array.isArray(parsed?.items) ? parsed.items : [];
+        return items
+            .map((item) => ({
+            en: String(item?.en ?? '').trim(),
+            zh: String(item?.zh ?? '').trim(),
+        }))
+            .filter((item) => item.en && item.zh)
+            .slice(0, 3);
+    }
+    async saveSentencePatternTrainingHistory(params) {
+        const { documentId, sourceSentence, scenario, items } = params;
+        return this.prisma.sentencePatternTrainingHistory.create({
+            data: {
+                documentId: documentId?.trim() || null,
+                sourceSentence: sourceSentence.trim(),
+                scenario: scenario.trim(),
+                items,
+            },
+        });
+    }
+    async getSentencePatternTrainingHistory(params) {
+        const { documentId, sourceSentence, limit = 20 } = params;
+        return this.prisma.sentencePatternTrainingHistory.findMany({
+            where: {
+                ...(documentId?.trim() ? { documentId: documentId.trim() } : {}),
+                ...(sourceSentence?.trim()
+                    ? { sourceSentence: sourceSentence.trim() }
+                    : {}),
+            },
+            orderBy: { createdAt: 'desc' },
+            take: Math.min(Math.max(limit, 1), 100),
+        });
+    }
     extractJsonText(input) {
         let text = (input ?? '').trim();
         const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
@@ -120,10 +212,12 @@ let AIService = AIService_1 = class AIService {
         const firstBrace = text.indexOf('[');
         const firstObj = text.indexOf('{');
         let start = -1;
-        if (firstBrace !== -1 && (firstObj === -1 || firstBrace < firstObj))
+        if (firstBrace !== -1 && (firstObj === -1 || firstBrace < firstObj)) {
             start = firstBrace;
-        if (firstObj !== -1 && (start === -1 || firstObj < start))
+        }
+        if (firstObj !== -1 && (start === -1 || firstObj < start)) {
             start = firstObj;
+        }
         if (start > 0)
             text = text.slice(start).trim();
         const lastBracket = text.lastIndexOf(']');
@@ -238,7 +332,7 @@ ${englishArticle}
             throw new Error('DeepSeek API Key not configured');
         const prompt = `
       You are an expert English teacher. For each English sentence provided, generate exactly two types of exercise questions.
-      
+
       STRICT CONSTRAINTS:
       1. sentenceId MUST match the input exactly.
       2. scramble.promptZh MUST be EXACTLY the same as the provided "translationZh". No IPA, no part of speech, no extra text.
@@ -287,7 +381,9 @@ ${englishArticle}
             });
             const content = response.data.choices[0].message.content;
             const parsed = JSON.parse(this.extractJsonText(content));
-            return Array.isArray(parsed) ? parsed : parsed.questions || Object.values(parsed)[0];
+            return Array.isArray(parsed)
+                ? parsed
+                : parsed.questions || Object.values(parsed)[0];
         }
         catch (error) {
             this.logger.error(`AI question generation failed: ${error.message}`);
@@ -456,9 +552,245 @@ STRICT OUTPUT FORMAT: Output ONLY valid JSON.
             throw new Error(`图片解析失败: ${error.message}`);
         }
     }
+    async extractWordsFromSentences(sentences) {
+        const config = (0, deepseek_config_1.getDeepSeekConfig)();
+        if (!config.apiKey)
+            throw new Error('DeepSeek API Key not configured');
+        const prompt = `
+You are an expert English teacher. Analyze the following English sentences and extract all important words (nouns, verbs, adjectives, and adverbs) with their parts of speech and Chinese translations.
+
+Task:
+1. For each sentence, identify all important words (nouns, verbs, adjectives, adverbs).
+2. For each word, provide:
+   - word: the English word (in lowercase)
+   - lemma: the base form/dictionary form of the word (in lowercase, no part of speech)
+   - partOfSpeech: one of "noun", "verb", "adjective", "adverb"
+   - translation: Chinese translation
+   - sentence: the original sentence containing this word
+
+Rules:
+- Only extract meaningful words (skip articles, prepositions, conjunctions, etc.)
+- If a word appears multiple times in different sentences, include it multiple times
+- Focus on important vocabulary words that are worth learning
+- Return a JSON object with a "words" field containing an array
+
+Sentences:
+${sentences.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+
+Return ONLY a JSON object in this format:
+{
+  "words": [
+    {
+      "word": "example",
+      "lemma": "example",
+      "partOfSpeech": "noun",
+      "translation": "例子",
+      "sentence": "This is an example sentence."
+    },
+    ...
+  ]
+}
+`;
+        try {
+            const response = await axios_1.default.post(config.baseUrl || 'https://api.deepseek.com/chat/completions', {
+                model: config.model,
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are an expert English teacher. Extract words with parts of speech and translations. Output only valid JSON object with a "words" array.',
+                    },
+                    { role: 'user', content: prompt },
+                ],
+                temperature: 0.2,
+                response_format: { type: 'json_object' },
+            }, {
+                headers: {
+                    Authorization: `Bearer ${config.apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+            const raw = String(response.data?.choices?.[0]?.message?.content ?? '');
+            this.logger.log(`Extract words raw response: ${raw.substring(0, 500)}`);
+            const jsonText = this.extractJsonText(raw);
+            let parsed;
+            try {
+                parsed = JSON.parse(jsonText);
+            }
+            catch (e) {
+                this.logger.error(`Extract words JSON parse failed. Raw content: ${raw}`);
+                throw e;
+            }
+            let words = [];
+            if (Array.isArray(parsed)) {
+                words = parsed;
+            }
+            else if (parsed &&
+                typeof parsed === 'object' &&
+                'words' in parsed &&
+                Array.isArray(parsed.words)) {
+                words = parsed.words;
+            }
+            else if (parsed && typeof parsed === 'object') {
+                const keys = Object.keys(parsed);
+                for (const key of keys) {
+                    if (Array.isArray(parsed[key])) {
+                        words = parsed[key];
+                        break;
+                    }
+                }
+            }
+            if (!Array.isArray(words)) {
+                this.logger.error(`Extract words: response is not an array. Parsed: ${JSON.stringify(parsed)}`);
+                return [];
+            }
+            if (words.length === 0) {
+                this.logger.warn('No words extracted from sentences');
+                return [];
+            }
+            const normalizedWords = words
+                .filter((w) => w && w.word && w.partOfSpeech && w.sentence)
+                .map((w) => ({
+                word: String(w.word).toLowerCase().trim(),
+                lemma: w.lemma ? String(w.lemma).toLowerCase().trim() : null,
+                partOfSpeech: String(w.partOfSpeech).toLowerCase().trim(),
+                translation: String(w.translation || '').trim(),
+                sentence: String(w.sentence).trim(),
+            }));
+            this.logger.log(`Extracted ${normalizedWords.length} words from ${sentences.length} sentences`);
+            return normalizedWords;
+        }
+        catch (error) {
+            this.logger.error(`Extract words failed: ${error.message}`);
+            if (error.response) {
+                this.logger.error(`API response status: ${error.response.status}`);
+                this.logger.error(`API response data: ${JSON.stringify(error.response.data)}`);
+            }
+            throw new Error(`词性提取失败: ${error.message}`);
+        }
+    }
+    async generateWordQuizQuestions(words) {
+        const config = (0, deepseek_config_1.getDeepSeekConfig)();
+        if (!config.apiKey)
+            throw new Error('DeepSeek API Key not configured');
+        const prompt = `
+You are an expert English teacher. Based on the provided list of extracted words (with their translations and source sentences), generate vocabulary quiz questions.
+
+Task:
+For each word, generate TWO types of questions:
+1. ZH_TO_EN: Given the Chinese translation and source sentence (as context), choose the correct English word.
+2. EN_TO_ZH: Given the English word and source sentence (as context), choose the correct Chinese translation.
+
+Rules for options:
+- Provide exactly 4 options for each question.
+- Options must be plausible distractors (similar part of speech, similar meaning, or commonly confused words).
+- Ensure the correct answer is included in the options.
+- IMPORTANT: Randomize the order of the options array. The correct answer MUST NOT always be the first item.
+
+Input Words:
+${JSON.stringify(words)}
+
+Return ONLY a JSON object with a "questions" field containing an array of objects:
+{
+  "questions": [
+    {
+      "type": "ZH_TO_EN",
+      "prompt": "中文翻译内容",
+      "answer": "correct_word",
+      "options": ["word1", "word2", "word3", "word4"],
+      "sentenceContext": "Source sentence with the word replaced by ____"
+    },
+    {
+      "type": "EN_TO_ZH",
+      "prompt": "english_word",
+      "answer": "正确翻译",
+      "options": ["翻译1", "翻译2", "翻译3", "翻译4"],
+      "sentenceContext": "Original source sentence"
+    }
+  ]
+}
+`;
+        try {
+            const response = await axios_1.default.post(config.baseUrl || 'https://api.deepseek.com/chat/completions', {
+                model: config.model,
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are an expert English teacher. Generate vocabulary quiz questions in JSON format.',
+                    },
+                    { role: 'user', content: prompt },
+                ],
+                temperature: 0.3,
+                response_format: { type: 'json_object' },
+            }, {
+                headers: {
+                    Authorization: `Bearer ${config.apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+            const content = response.data.choices[0].message.content;
+            const parsed = JSON.parse(this.extractJsonText(content));
+            return parsed.questions || [];
+        }
+        catch (error) {
+            this.logger.error(`Word quiz generation failed: ${error.message}`);
+            throw error;
+        }
+    }
+    async getLemmasForWords(words) {
+        if (words.length === 0)
+            return {};
+        const config = (0, deepseek_config_1.getDeepSeekConfig)();
+        if (!config.apiKey)
+            throw new Error('DeepSeek API Key not configured');
+        const prompt = `
+You are a linguistic expert. For the following list of English words, provide their base form (lemma/dictionary form).
+
+Rules:
+- All output should be in lowercase.
+- If a word is already in its base form, the lemma is the word itself.
+- Return ONLY a JSON object where keys are the input words and values are their respective lemmas.
+
+Words:
+${words.join(', ')}
+
+Example Output:
+{
+  "running": "run",
+  "better": "good",
+  "apples": "apple",
+  "studies": "study"
+}
+`;
+        try {
+            const response = await axios_1.default.post(config.baseUrl || 'https://api.deepseek.com/chat/completions', {
+                model: config.model,
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are a professional linguistic expert. Output only valid JSON mapping words to their lemmas.',
+                    },
+                    { role: 'user', content: prompt },
+                ],
+                temperature: 0.1,
+                response_format: { type: 'json_object' },
+            }, {
+                headers: {
+                    Authorization: `Bearer ${config.apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+            const content = response.data.choices[0].message.content;
+            return JSON.parse(this.extractJsonText(content));
+        }
+        catch (error) {
+            this.logger.error(`Failed to get lemmas: ${error.message}`);
+            throw error;
+        }
+    }
 };
 exports.AIService = AIService;
 exports.AIService = AIService = AIService_1 = __decorate([
-    (0, common_1.Injectable)()
+    (0, common_1.Injectable)(),
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
 ], AIService);
 //# sourceMappingURL=ai.service.js.map

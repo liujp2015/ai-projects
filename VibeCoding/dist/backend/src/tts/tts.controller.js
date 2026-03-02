@@ -11,29 +11,37 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var TTSController_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TTSController = void 0;
 const common_1 = require("@nestjs/common");
 const tts_service_1 = require("./tts.service");
-let TTSController = class TTSController {
+let TTSController = TTSController_1 = class TTSController {
     ttsService;
+    logger = new common_1.Logger(TTSController_1.name);
     constructor(ttsService) {
         this.ttsService = ttsService;
     }
     async streamAudio(text, res) {
         if (!text) {
-            return res.status(400).send('Text is required');
+            return res.status(400).json({ error: 'Text is required' });
         }
         try {
+            this.logger.log(`TTS request for text: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
             const buffer = await this.ttsService.getAudioStream(text);
             res.set({
                 'Content-Type': 'audio/mpeg',
-                'Content-Length': buffer.length,
+                'Content-Length': buffer.length.toString(),
+                'Cache-Control': 'public, max-age=3600',
             });
             res.send(buffer);
         }
         catch (error) {
-            res.status(500).send('Failed to generate audio');
+            this.logger.error(`TTS generation failed: ${error?.message || error}`, error?.stack);
+            res.status(500).json({
+                error: 'Failed to generate audio',
+                message: error?.message || 'Unknown error'
+            });
         }
     }
 };
@@ -46,7 +54,7 @@ __decorate([
     __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], TTSController.prototype, "streamAudio", null);
-exports.TTSController = TTSController = __decorate([
+exports.TTSController = TTSController = TTSController_1 = __decorate([
     (0, common_1.Controller)('tts'),
     __metadata("design:paramtypes", [tts_service_1.TTSService])
 ], TTSController);

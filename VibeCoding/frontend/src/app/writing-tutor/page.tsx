@@ -32,6 +32,27 @@ export default function WritingTutorPage() {
 
   const highlightedSegments = useMemo(() => {
     if (!result || !originalText) return [] as Array<{ text: string; type?: LogicType }>;
+
+    const units = [...result.logicUnits].sort((a, b) => a.start - b.start);
+    const segs: Array<{ text: string; type?: LogicType }> = [];
+    let cursor = 0;
+
+    const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+
+    for (const unit of units) {
+      let start = unit.start;
+      let end = unit.end;
+
+      const safeStart = Math.max(0, Math.min(start, originalText.length));
+      const safeEnd = Math.max(safeStart, Math.min(end, originalText.length));
+      let slice = originalText.slice(safeStart, safeEnd);
+
+      const expected = String(unit.text ?? '');
+      const mismatch = expected && normalize(slice) !== normalize(expected);
+
+      if (mismatch) {
+        const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\  const highlightedSegments = useMemo(() => {
+    if (!result || !originalText) return [] as Array<{ text: string; type?: LogicType }>;
     const units = [...result.logicUnits].sort((a, b) => a.start - b.start);
     const segs: Array<{ text: string; type?: LogicType }> = [];
     let cursor = 0;
@@ -40,6 +61,32 @@ export default function WritingTutorPage() {
       segs.push({ text: originalText.slice(unit.start, unit.end), type: unit.type });
       cursor = Math.max(cursor, unit.end);
     }
+    if (cursor < originalText.length) segs.push({ text: originalText.slice(cursor) });
+    return segs;
+  }, [result, originalText]);').replace(/\s+/g, '\\s+');
+        const regex = new RegExp(escaped, 'i');
+        const remain = originalText.slice(cursor);
+        const m = remain.match(regex);
+        if (m && typeof m.index === 'number') {
+          start = cursor + m.index;
+          end = start + m[0].length;
+          slice = originalText.slice(start, end);
+        }
+      } else {
+        start = safeStart;
+        end = safeEnd;
+      }
+
+      if (start > cursor) {
+        segs.push({ text: originalText.slice(cursor, start) });
+      }
+
+      if (slice) {
+        segs.push({ text: slice, type: unit.type });
+        cursor = Math.max(cursor, end);
+      }
+    }
+
     if (cursor < originalText.length) segs.push({ text: originalText.slice(cursor) });
     return segs;
   }, [result, originalText]);

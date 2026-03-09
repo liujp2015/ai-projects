@@ -24,12 +24,13 @@ let WritingController = class WritingController {
         this.writingService = writingService;
     }
     async analyze(body) {
-        const originalText = String(body?.originalText ?? '').trim();
-        if (!originalText)
+        const originalText = String(body?.originalText ?? '');
+        const normalized = originalText.trim();
+        if (!normalized)
             throw new common_1.BadRequestException('originalText 不能为空');
-        if (originalText.length < 20)
+        if (normalized.length < 20)
             throw new common_1.BadRequestException('originalText 太短，请至少输入一个完整段落');
-        if (originalText.length > 6000)
+        if (normalized.length > 6000)
             throw new common_1.BadRequestException('originalText 过长，请控制在 6000 字符以内');
         return this.writingService.analyze(originalText);
     }

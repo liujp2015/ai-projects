@@ -19,7 +19,7 @@ let WritingService = WritingService_1 = class WritingService {
     logger = new common_1.Logger(WritingService_1.name);
     sessions = new Map();
     async analyze(originalText) {
-        const text = originalText.trim();
+        const text = originalText;
         const config = (0, qwen_config_1.getQwenConfig)();
         if (!config.apiKey) {
             return this.heuristicAnalyze(text);

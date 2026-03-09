@@ -20,10 +20,11 @@ export class WritingController {
 
   @Post('analyze')
   async analyze(@Body() body: AnalyzeDto) {
-    const originalText = String(body?.originalText ?? '').trim();
-    if (!originalText) throw new BadRequestException('originalText 不能为空');
-    if (originalText.length < 20) throw new BadRequestException('originalText 太短，请至少输入一个完整段落');
-    if (originalText.length > 6000) throw new BadRequestException('originalText 过长，请控制在 6000 字符以内');
+    const originalText = String(body?.originalText ?? '');
+    const normalized = originalText.trim();
+    if (!normalized) throw new BadRequestException('originalText 不能为空');
+    if (normalized.length < 20) throw new BadRequestException('originalText 太短，请至少输入一个完整段落');
+    if (normalized.length > 6000) throw new BadRequestException('originalText 过长，请控制在 6000 字符以内');
 
     return this.writingService.analyze(originalText);
   }

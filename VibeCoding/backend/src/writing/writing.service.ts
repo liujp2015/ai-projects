@@ -51,7 +51,7 @@ export class WritingService {
   private readonly sessions = new Map<string, WritingSession>();
 
   async analyze(originalText: string): Promise<AnalyzeResult> {
-    const text = originalText.trim();
+    const text = originalText;
     const config = getQwenConfig();
 
     if (!config.apiKey) {

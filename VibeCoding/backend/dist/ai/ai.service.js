@@ -181,18 +181,32 @@ ${scenario}
     }
     async saveSentencePatternTrainingHistory(params) {
         const { documentId, sourceSentence, scenario, items } = params;
+        const normalizedDocumentId = documentId?.trim() || null;
+        const normalizedSentence = sourceSentence.trim();
+        const normalizedScenario = scenario.trim();
+        const existing = await this.prisma.sentencePatternTrainingHistory.findFirst({
+            where: {
+                documentId: normalizedDocumentId,
+                sourceSentence: normalizedSentence,
+                scenario: normalizedScenario,
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+        if (existing) {
+            return existing;
+        }
         return this.prisma.sentencePatternTrainingHistory.create({
             data: {
-                documentId: documentId?.trim() || null,
-                sourceSentence: sourceSentence.trim(),
-                scenario: scenario.trim(),
+                documentId: normalizedDocumentId,
+                sourceSentence: normalizedSentence,
+                scenario: normalizedScenario,
                 items,
             },
         });
     }
     async getSentencePatternTrainingHistory(params) {
         const { documentId, sourceSentence, limit = 20 } = params;
-        return this.prisma.sentencePatternTrainingHistory.findMany({
+        const records = await this.prisma.sentencePatternTrainingHistory.findMany({
             where: {
                 ...(documentId?.trim() ? { documentId: documentId.trim() } : {}),
                 ...(sourceSentence?.trim()
@@ -201,6 +215,19 @@ ${scenario}
             },
             orderBy: { createdAt: 'desc' },
             take: Math.min(Math.max(limit, 1), 100),
+        });
+        return records.map((record) => {
+            const rawItems = Array.isArray(record.items)
+                ? record.items
+                : [];
+            const items = rawItems.map((item) => ({
+                en: String(item?.en ?? '').trim(),
+                zh: String(item?.zh ?? '').trim(),
+            }));
+            return {
+                ...record,
+                items,
+            };
         });
     }
     extractJsonText(input) {

@@ -1619,8 +1619,13 @@ export default function DocumentDetailPage() {
                       <div className="text-[11px] text-gray-500 mb-1">场景：{record.scenario}</div>
                       <div className="space-y-1">
                         {(record.items || []).map((it, i) => (
-                          <div key={`${record.id}-${i}`} className="text-xs text-gray-700">
-                            {i + 1}. {it.en}
+                          <div key={`${record.id}-${i}`} className="rounded-md border border-gray-200 bg-white p-2 space-y-1">
+                            <div className="text-xs text-gray-800 font-medium">
+                              {i + 1}. {it.en}
+                            </div>
+                            <div className="text-xs text-gray-600">
+                              {it.zh || '（该条历史记录没有保存中文翻译）'}
+                            </div>
                           </div>
                         ))}
                       </div>

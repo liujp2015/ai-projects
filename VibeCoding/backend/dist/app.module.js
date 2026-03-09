@@ -19,6 +19,7 @@ const exercise_module_1 = require("./exercise/exercise.module");
 const sentence_builder_module_1 = require("./sentence-builder/sentence-builder.module");
 const conversation_module_1 = require("./conversation/conversation.module");
 const review_module_1 = require("./review/review.module");
+const writing_module_1 = require("./writing/writing.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -34,6 +35,7 @@ exports.AppModule = AppModule = __decorate([
             sentence_builder_module_1.SentenceBuilderModule,
             conversation_module_1.ConversationModule,
             review_module_1.ReviewModule,
+            writing_module_1.WritingModule,
         ],
         controllers: [app_controller_1.AppController],
         providers: [app_service_1.AppService],

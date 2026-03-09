@@ -10,6 +10,7 @@ import { ExerciseModule } from './exercise/exercise.module';
 import { SentenceBuilderModule } from './sentence-builder/sentence-builder.module';
 import { ConversationModule } from './conversation/conversation.module';
 import { ReviewModule } from './review/review.module';
+import { WritingModule } from './writing/writing.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ReviewModule } from './review/review.module';
     SentenceBuilderModule,
     ConversationModule,
     ReviewModule,
+    WritingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

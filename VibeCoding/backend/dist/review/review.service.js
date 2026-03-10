@@ -12,7 +12,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ReviewService = void 0;
 const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../prisma/prisma.service");
-const client_1 = require("@prisma/client");
 let ReviewService = class ReviewService {
     prisma;
     INTERVAL_SEQUENCE = [1, 2, 4, 7, 15, 30, 60, 180];
@@ -51,7 +50,7 @@ let ReviewService = class ReviewService {
             sentence: ew.sentence,
             stage: 0,
             nextReviewAt: now,
-            status: client_1.ReviewCardStatus.LEARNING,
+            status: 'LEARNING',
         }));
         const insertedCandidates = rows.filter((r) => !existingKey.has(`${r.word.toLowerCase()}@@${r.partOfSpeech.toLowerCase()}`));
         const importantPairs = await this.prisma.alignedWordPair.findMany({
@@ -73,7 +72,7 @@ let ReviewService = class ReviewService {
                     sentence: null,
                     stage: 0,
                     nextReviewAt: now,
-                    status: client_1.ReviewCardStatus.LEARNING,
+                    status: 'LEARNING',
                 });
             }
         }
@@ -142,7 +141,7 @@ let ReviewService = class ReviewService {
     async getDueCards(documentId, limit = 50, partOfSpeech, mode = 'due') {
         const where = {
             documentId,
-            status: client_1.ReviewCardStatus.LEARNING,
+            status: 'LEARNING',
         };
         if (mode === 'due') {
             where.nextReviewAt = { lte: new Date() };
@@ -171,7 +170,7 @@ let ReviewService = class ReviewService {
         if (result === 'GOOD') {
             nextStage = Math.min(card.stage + 1, this.INTERVAL_SEQUENCE.length - 1);
             if (nextStage === this.INTERVAL_SEQUENCE.length - 1) {
-                nextStatus = client_1.ReviewCardStatus.MASTERED;
+                nextStatus = 'MASTERED';
             }
         }
         else {
@@ -194,13 +193,13 @@ let ReviewService = class ReviewService {
         const now = new Date();
         const [dueCount, learningCount, masteredCount] = await Promise.all([
             this.prisma.reviewCard.count({
-                where: { documentId, nextReviewAt: { lte: now }, status: client_1.ReviewCardStatus.LEARNING },
+                where: { documentId, nextReviewAt: { lte: now }, status: 'LEARNING' },
             }),
             this.prisma.reviewCard.count({
-                where: { documentId, status: client_1.ReviewCardStatus.LEARNING },
+                where: { documentId, status: 'LEARNING' },
             }),
             this.prisma.reviewCard.count({
-                where: { documentId, status: client_1.ReviewCardStatus.MASTERED },
+                where: { documentId, status: 'MASTERED' },
             }),
         ]);
         return {

@@ -1,6 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ReviewCardStatus } from '@prisma/client';
 
 @Injectable()
 export class ReviewService {
@@ -57,7 +56,7 @@ export class ReviewService {
       sentence: ew.sentence as string | null,
       stage: 0,
       nextReviewAt: now,
-      status: ReviewCardStatus.LEARNING,
+      status: 'LEARNING',
     }));
 
     const insertedCandidates: any[] = rows.filter(
@@ -90,7 +89,7 @@ export class ReviewService {
           sentence: null as string | null, // 重点词可能没有例句
           stage: 0,
           nextReviewAt: now,
-          status: ReviewCardStatus.LEARNING,
+          status: 'LEARNING',
         });
       }
     }
@@ -174,7 +173,7 @@ export class ReviewService {
   async getDueCards(documentId: string, limit: number = 50, partOfSpeech?: string, mode: 'due' | 'all' = 'due') {
     const where: any = {
       documentId,
-      status: ReviewCardStatus.LEARNING,
+      status: 'LEARNING',
     };
 
     if (mode === 'due') {
@@ -215,7 +214,7 @@ export class ReviewService {
       nextStage = Math.min(card.stage + 1, this.INTERVAL_SEQUENCE.length - 1);
       // 如果到了最后一个阶段，标记为已掌握
       if (nextStage === this.INTERVAL_SEQUENCE.length - 1) {
-        nextStatus = ReviewCardStatus.MASTERED;
+        nextStatus = 'MASTERED';
       }
     } else {
       // 不认识：回退 2 个阶段，最少到 0
@@ -244,13 +243,13 @@ export class ReviewService {
     const now = new Date();
     const [dueCount, learningCount, masteredCount] = await Promise.all([
       this.prisma.reviewCard.count({
-        where: { documentId, nextReviewAt: { lte: now }, status: ReviewCardStatus.LEARNING },
+        where: { documentId, nextReviewAt: { lte: now }, status: 'LEARNING' },
       }),
       this.prisma.reviewCard.count({
-        where: { documentId, status: ReviewCardStatus.LEARNING },
+        where: { documentId, status: 'LEARNING' },
       }),
       this.prisma.reviewCard.count({
-        where: { documentId, status: ReviewCardStatus.MASTERED },
+        where: { documentId, status: 'MASTERED' },
       }),
     ]);
 

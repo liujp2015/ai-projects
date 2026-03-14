@@ -32,11 +32,17 @@ let DocumentController = DocumentController_1 = class DocumentController {
     async createManual(title, content) {
         return this.documentService.saveRawText(content, title || 'Untitled Text');
     }
-    async findAll() {
-        return this.documentService.findAll();
+    async findAll(page, limit) {
+        return this.documentService.findAll(page ? parseInt(page) : undefined, limit ? parseInt(limit) : undefined);
     }
     async findOne(id) {
         return this.documentService.findOne(id);
+    }
+    async updateDocument(id, title) {
+        return this.documentService.updateDocument(id, { title });
+    }
+    async deleteDocument(id) {
+        return this.documentService.deleteDocument(id);
     }
     async translateMissing(id) {
         return this.documentService.translateMissingSentences(id);
@@ -125,8 +131,10 @@ __decorate([
 ], DocumentController.prototype, "createManual", null);
 __decorate([
     (0, common_1.Get)(),
+    __param(0, (0, common_1.Query)('page')),
+    __param(1, (0, common_1.Query)('limit')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
+    __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], DocumentController.prototype, "findAll", null);
 __decorate([
@@ -136,6 +144,21 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], DocumentController.prototype, "findOne", null);
+__decorate([
+    (0, common_1.Patch)(':id'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)('title')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "updateDocument", null);
+__decorate([
+    (0, common_1.Delete)(':id'),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "deleteDocument", null);
 __decorate([
     (0, common_1.Post)(':id/translate/missing'),
     __param(0, (0, common_1.Param)('id')),

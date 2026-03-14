@@ -74,8 +74,17 @@ export type DocumentDetail = DocumentItem & {
   }>;
 };
 
-export async function fetchDocuments(): Promise<DocumentItem[]> {
-  const res = await apiFetch('/api/documents', { cache: 'no-store' });
+export type PaginatedDocuments = {
+  items: DocumentItem[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
+export async function fetchDocuments(page: number = 1, limit: number = 20): Promise<PaginatedDocuments> {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  const res = await apiFetch(`/api/documents?${params.toString()}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to fetch documents: ${res.status}`);
   return res.json();
 }
@@ -291,6 +300,22 @@ export async function fetchDocument(id: string): Promise<DocumentDetail> {
   const res = await apiFetch(`/api/documents/${id}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to fetch document: ${res.status}`);
   return res.json();
+}
+
+export async function updateDocument(id: string, data: { title: string }): Promise<DocumentItem> {
+  const res = await apiFetch(`/api/documents/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Failed to update document: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteDocument(id: string): Promise<void> {
+  const res = await apiFetch(`/api/documents/${id}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`Failed to delete document: ${res.status}`);
 }
 
 export async function uploadDocument(file: File, title?: string): Promise<DocumentItem> {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { fetchDocuments, uploadDocument, uploadImages, createManualDocument, fetchReviewQueue, DocumentItem } from '@/lib/api';
+import { fetchDocuments, uploadDocument, uploadImages, createManualDocument, fetchReviewQueue, updateDocument, deleteDocument, DocumentItem } from '@/lib/api';
 import Link from 'next/link';
 
 export default function DocumentsPage() {
@@ -10,6 +10,11 @@ export default function DocumentsPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [page, setPage] = useState(1);
+  const [limit] = useState(10);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
   
   // Manual input state
   const [showManualInput, setShowManualInput] = useState(false);
@@ -17,14 +22,21 @@ export default function DocumentsPage() {
   const [manualContent, setManualContent] = useState('');
   const [savingManual, setSavingManual] = useState(false);
 
-  const loadData = async () => {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+  const [savingTitle, setSavingTitle] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const loadData = async (targetPage = page) => {
     try {
       setLoading(true);
       const [docData, reviewData] = await Promise.all([
-        fetchDocuments(),
+        fetchDocuments(targetPage, limit),
         fetchReviewQueue().catch(() => []), // Handle error gracefully
       ]);
-      setDocuments(docData);
+      setDocuments(docData.items);
+      setTotalPages(docData.totalPages);
+      setTotal(docData.total);
       setReviewCount(reviewData.length);
     } catch (err) {
       setError('Failed to load data');
@@ -35,8 +47,9 @@ export default function DocumentsPage() {
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    loadData(page);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -46,7 +59,7 @@ export default function DocumentsPage() {
       setUploading(true);
       setError(null);
       await uploadDocument(file);
-      await loadData();
+      await loadData(page);
     } catch (err) {
       setError('Upload failed. Please ensure backend is running at :3001');
       console.error(err);
@@ -64,7 +77,7 @@ export default function DocumentsPage() {
       setError(null);
       const title = prompt('Enter a title for this image group:', `Images ${new Date().toLocaleDateString()}`);
       await uploadImages(files, title || undefined);
-      await loadData();
+      await loadData(page);
     } catch (err) {
       setError('Images upload & OCR failed. Please ensure backend is running at :3001');
       console.error(err);
@@ -84,7 +97,7 @@ export default function DocumentsPage() {
       setManualTitle('');
       setManualContent('');
       setShowManualInput(false);
-      await loadData();
+      await loadData(page);
     } catch (err) {
       setError('Failed to save manual content');
       console.error(err);
@@ -103,6 +116,65 @@ export default function DocumentsPage() {
       console.log('[TTS] Testing browser speech synthesis...');
     } else {
       alert('您的浏览器不支持 Web Speech API，请尝试使用 Chrome 或 Edge 浏览器。');
+    }
+  };
+
+  const startEdit = (doc: DocumentItem) => {
+    setEditingId(doc.id);
+    setEditingTitle(doc.title);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditingTitle('');
+  };
+
+  const handleSaveTitle = async (docId: string) => {
+    if (!editingTitle.trim()) {
+      setError('文档名称不能为空');
+      return;
+    }
+
+    try {
+      setSavingTitle(true);
+      setError(null);
+      await updateDocument(docId, { title: editingTitle.trim() });
+      await loadData(page);
+      cancelEdit();
+    } catch (err) {
+      setError('更新文档名称失败');
+      console.error(err);
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+
+  const handleDelete = async (doc: DocumentItem) => {
+    const confirmed = window.confirm(`确定删除文档「${doc.title}」吗？此操作不可恢复。`);
+    if (!confirmed) return;
+
+    try {
+      setDeletingId(doc.id);
+      setError(null);
+      await deleteDocument(doc.id);
+      const nextPage = page > 1 && documents.length === 1 ? page - 1 : page;
+      if (nextPage !== page) {
+        setPage(nextPage);
+      } else {
+        await loadData(nextPage);
+      }
+    } catch (err) {
+      setError('删除文档失败');
+      console.error(err);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handlePageChange = (nextPage: number) => {
+    const clamped = Math.min(Math.max(nextPage, 1), totalPages);
+    if (clamped !== page) {
+      setPage(clamped);
     }
   };
 
@@ -244,14 +316,63 @@ export default function DocumentsPage() {
             <ul className="divide-y divide-gray-200">
               {documents.map((doc) => (
                 <li key={doc.id}>
-                  <Link href={`/documents/${doc.id}`} className="block hover:bg-gray-50">
+                  <div className="block hover:bg-gray-50">
                     <div className="px-4 py-4 sm:px-6">
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-medium text-blue-600 truncate">{doc.title}</p>
-                        <div className="ml-2 flex-shrink-0 flex">
-                          <p className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                            {doc.mimeType === 'application/pdf' ? 'PDF' : 'Word'}
-                          </p>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          {editingId === doc.id ? (
+                            <div className="flex flex-col gap-2">
+                              <input
+                                value={editingTitle}
+                                onChange={(e) => setEditingTitle(e.target.value)}
+                                className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:ring-blue-500"
+                                placeholder="输入文档名称"
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleSaveTitle(doc.id)}
+                                  disabled={savingTitle}
+                                  className="inline-flex items-center justify-center rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                                >
+                                  {savingTitle ? '保存中...' : '保存'}
+                                </button>
+                                <button
+                                  onClick={cancelEdit}
+                                  disabled={savingTitle}
+                                  className="inline-flex items-center justify-center rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                                >
+                                  取消
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <Link href={`/documents/${doc.id}`} className="text-sm font-medium text-blue-600 truncate hover:underline">
+                              {doc.title}
+                            </Link>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                          <div className="ml-2 flex-shrink-0 flex">
+                            <p className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                              {doc.mimeType === 'application/pdf' ? 'PDF' : 'Word'}
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => startEdit(doc)}
+                              disabled={editingId === doc.id || deletingId === doc.id}
+                              className="inline-flex items-center justify-center rounded-md border border-gray-300 px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                            >
+                              修改名称
+                            </button>
+                            <button
+                              onClick={() => handleDelete(doc)}
+                              disabled={deletingId === doc.id}
+                              className="inline-flex items-center justify-center rounded-md border border-red-300 px-2 py-1 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                            >
+                              {deletingId === doc.id ? '删除中...' : '删除'}
+                            </button>
+                          </div>
                         </div>
                       </div>
                       <div className="mt-2 sm:flex sm:justify-between">
@@ -265,12 +386,36 @@ export default function DocumentsPage() {
                         </div>
                       </div>
                     </div>
-                  </Link>
+                  </div>
                 </li>
               ))}
             </ul>
           )}
         </div>
+
+        {totalPages > 1 && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6">
+            <p className="text-sm text-gray-500">
+              共 {total} 个文档 · 第 {page} / {totalPages} 页
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handlePageChange(page - 1)}
+                disabled={page <= 1 || loading}
+                className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                上一页
+              </button>
+              <button
+                onClick={() => handlePageChange(page + 1)}
+                disabled={page >= totalPages || loading}
+                className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                下一页
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

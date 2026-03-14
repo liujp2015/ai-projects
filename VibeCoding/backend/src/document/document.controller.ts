@@ -9,6 +9,8 @@ import {
   Body,
   Query,
   Logger,
+  Patch,
+  Delete,
 } from '@nestjs/common';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { DocumentService } from './document.service';
@@ -46,13 +48,29 @@ export class DocumentController {
   }
 
   @Get()
-  async findAll() {
-    return this.documentService.findAll();
+  async findAll(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.documentService.findAll(page ? parseInt(page) : undefined, limit ? parseInt(limit) : undefined);
   }
 
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.documentService.findOne(id);
+  }
+
+  @Patch(':id')
+  async updateDocument(
+    @Param('id') id: string,
+    @Body('title') title: string,
+  ) {
+    return this.documentService.updateDocument(id, { title });
+  }
+
+  @Delete(':id')
+  async deleteDocument(@Param('id') id: string) {
+    return this.documentService.deleteDocument(id);
   }
 
   @Post(':id/translate/missing')

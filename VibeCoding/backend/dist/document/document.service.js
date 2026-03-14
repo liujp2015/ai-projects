@@ -205,10 +205,25 @@ let DocumentService = DocumentService_1 = class DocumentService {
         }
         return document;
     }
-    async findAll() {
-        return this.prisma.document.findMany({
-            orderBy: { createdAt: 'desc' },
-        });
+    async findAll(page = 1, limit = 10) {
+        const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+        const safeLimit = Number.isFinite(limit) && limit > 0 && limit <= 100 ? limit : 10;
+        const skip = (safePage - 1) * safeLimit;
+        const [items, total] = await this.prisma.$transaction([
+            this.prisma.document.findMany({
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: safeLimit,
+            }),
+            this.prisma.document.count(),
+        ]);
+        return {
+            items,
+            total,
+            page: safePage,
+            limit: safeLimit,
+            totalPages: Math.ceil(total / safeLimit),
+        };
     }
     async findOne(id) {
         return this.prisma.document.findUnique({
@@ -224,6 +239,21 @@ let DocumentService = DocumentService_1 = class DocumentService {
                     orderBy: { orderIndex: 'asc' },
                 },
             },
+        });
+    }
+    async updateDocument(id, data) {
+        const title = data.title?.trim();
+        if (!title) {
+            throw new Error('Title is required');
+        }
+        return this.prisma.document.update({
+            where: { id },
+            data: { title },
+        });
+    }
+    async deleteDocument(id) {
+        return this.prisma.document.delete({
+            where: { id },
         });
     }
     async appendText(documentId, newText) {

@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { fetchDocument, fetchDocumentTranslation, fetchQuestionBank, generateQuestionBank, DocumentDetail, DocumentTranslation, ExerciseQuestion, lookupWord, WordDefinition, translateMissingSentences, translateAlignRebuild, upsertUserWord, deleteUserWord, fetchUserWords, UserWord, getTTSUrl, validateSentence, AIValidationResult, appendText, appendImages, extractWordsFromDocument, fetchExtractedWords, ExtractedWord, generateWordQuiz, fetchWordQuizQuestions, WordQuizQuestion, importReviewCards, fetchReviewSummary, exportDocumentLemmas, backfillDocumentLemmas, updateAlignedWordPair, generateSentencePatternTraining, SentencePatternTrainingItem, fetchSentencePatternTrainingHistory, SentencePatternTrainingHistoryItem } from '@/lib/api';
+import { fetchDocument, fetchDocumentTranslation, fetchQuestionBank, generateQuestionBank, DocumentDetail, DocumentTranslation, ExerciseQuestion, lookupWord, WordDefinition, translateMissingSentences, translateAlignRebuild, upsertUserWord, deleteUserWord, fetchUserWords, UserWord, getTTSUrl, validateSentence, AIValidationResult, appendText, appendImages, extractWordsFromDocument, fetchExtractedWords, ExtractedWord, generateWordQuiz, fetchWordQuizQuestions, WordQuizQuestion, importReviewCards, fetchReviewSummary, exportDocumentLemmas, backfillDocumentLemmas, updateAlignedWordPair, generateSentencePatternTraining, SentencePatternTrainingItem, fetchSentencePatternTrainingHistory, SentencePatternTrainingHistoryItem, generateSentenceChunkQuizForPair, SentenceChunkQuizItem, fetchSentenceChunkQuizStatus, fetchSentenceChunkQuizBySentenceId } from '@/lib/api';
 import Link from 'next/link';
 
 const isWordToken = (token: string) => /^[a-zA-Z0-9'-]+$/.test(token);
@@ -115,6 +115,19 @@ export default function DocumentDetailPage() {
   const [generatingWordQuiz, setGeneratingWordQuiz] = useState(false);
   const [loadingWordQuiz, setLoadingWordQuiz] = useState(false);
 
+  // 核心句子词组题（中文选英文，Qwen 生成）
+  const [chunkQuizItem, setChunkQuizItem] = useState<SentenceChunkQuizItem | null>(null);
+  const [chunkQuizLoadingRowKey, setChunkQuizLoadingRowKey] = useState<string | null>(null);
+  const [showChunkQuiz, setShowChunkQuiz] = useState(false);
+  const [chunkQuizSentenceLabel, setChunkQuizSentenceLabel] = useState<string>('');
+  const [chunkQuizAnswers, setChunkQuizAnswers] = useState<Record<number, string>>({});
+  const [chunkQuizResult, setChunkQuizResult] = useState<{ isCorrect: boolean; message: string } | null>(null);
+  const [chunkQuizGeneratedSentenceIds, setChunkQuizGeneratedSentenceIds] = useState<Set<string>>(new Set());
+  const [chunkQuizGeneratedEnglishList, setChunkQuizGeneratedEnglishList] = useState<string[]>([]);
+  const [chunkQuizGeneratedRowKeys, setChunkQuizGeneratedRowKeys] = useState<Set<string>>(new Set());
+  const [chunkQuizStatusLoadFailed, setChunkQuizStatusLoadFailed] = useState(false);
+  const [chunkQuizCheckingRowKey, setChunkQuizCheckingRowKey] = useState<string | null>(null);
+
   // 词性提取状态
   const [extractedWords, setExtractedWords] = useState<ExtractedWord[]>([]);
   const [extractingWords, setExtractingWords] = useState(false);
@@ -169,9 +182,12 @@ export default function DocumentDetailPage() {
 
   const handleGenerateQuestions = async () => {
     if (!id || generatingQuestions) return;
-    
-    // Check if we should force regeneration
-    const force = confirm('是否要覆盖现有句子题并重新生成？\n\n注意：该按钮只生成句子题；单词题请使用“生成单词测试题”。');
+
+    const shouldGenerate = confirm('是否开始生成句子题库？');
+    if (!shouldGenerate) return;
+
+    // 第二次确认：是否覆盖已有题目
+    const force = confirm('是否要覆盖现有句子题并重新生成？\n\n点“确定”=覆盖重建；点“取消”=仅增量生成缺失题目。');
     
     try {
       setGeneratingQuestions(true);
@@ -192,7 +208,11 @@ export default function DocumentDetailPage() {
 
   const handleGenerateWordQuiz = async () => {
     if (!id || generatingWordQuiz) return;
-    const force = confirm('是否要覆盖现有单词测试题并重新生成？');
+
+    const shouldGenerate = confirm('是否开始生成单词测试题？');
+    if (!shouldGenerate) return;
+
+    const force = confirm('是否要覆盖现有单词测试题并重新生成？\n\n点“确定”=覆盖重建；点“取消”=保留已有题目并按需增量生成。');
     try {
       setGeneratingWordQuiz(true);
       const res = await generateWordQuiz(id as string, force);
@@ -300,6 +320,144 @@ export default function DocumentDetailPage() {
     });
   };
 
+  const getChunkQuizRowKey = (pair: { zh: string; en: string; sentenceId: string | null }, idx?: number) => (
+    pair.sentenceId || `${idx ?? -1}:${pair.en}__${pair.zh}`
+  );
+
+  const isChunkQuizGenerated = (pair: { zh: string; en: string; sentenceId: string | null }, idx?: number) => {
+    const rowKey = getChunkQuizRowKey(pair, idx);
+    if (pair.sentenceId && chunkQuizGeneratedSentenceIds.has(pair.sentenceId)) return true;
+    if (chunkQuizGeneratedRowKeys.has(rowKey)) return true;
+
+    const normalizedEn = normalizeForCompare(pair.en || '');
+    if (!normalizedEn) return false;
+    return chunkQuizGeneratedEnglishList.some((savedEn) => {
+      if (!savedEn) return false;
+      return savedEn === normalizedEn || savedEn.includes(normalizedEn) || normalizedEn.includes(savedEn);
+    });
+  };
+
+  const handleGenerateChunkQuiz = async (
+    pair: { zh: string; en: string; sentenceId: string | null },
+    idx?: number,
+  ) => {
+    if (!id || chunkQuizLoadingRowKey) return;
+    const rowKey = getChunkQuizRowKey(pair, idx);
+    const alreadyGenerated = isChunkQuizGenerated(pair, idx);
+    try {
+      setChunkQuizLoadingRowKey(rowKey);
+
+      // 仅在“查看句子题”场景才查库；“生成句子题”直接走生成接口
+      if (alreadyGenerated && pair.sentenceId) {
+        const existing = await fetchSentenceChunkQuizBySentenceId(id as string, pair.sentenceId);
+        if (existing?.item) {
+          setChunkQuizItem(existing.item);
+          setChunkQuizSentenceLabel(pair.zh);
+          setChunkQuizAnswers({});
+          setChunkQuizResult(null);
+          setShowChunkQuiz(true);
+          setChunkQuizGeneratedRowKeys((prev) => new Set([...prev, rowKey]));
+          setChunkQuizGeneratedSentenceIds((prev) => new Set([...prev, pair.sentenceId as string]));
+          return;
+        }
+      }
+
+      const res = await generateSentenceChunkQuizForPair(id as string, {
+        zh: pair.zh,
+        en: pair.en,
+        sentenceId: pair.sentenceId || undefined,
+      });
+      if (!res?.item) throw new Error('未生成到可用题目，请稍后重试');
+      setChunkQuizItem(res.item);
+      setChunkQuizSentenceLabel(pair.zh);
+      setChunkQuizAnswers({});
+      setChunkQuizResult(null);
+      setShowChunkQuiz(true);
+      setChunkQuizGeneratedRowKeys((prev) => new Set([...prev, rowKey]));
+      if (res.sentenceId) {
+        setChunkQuizGeneratedSentenceIds((prev) => new Set([...prev, res.sentenceId]));
+      }
+      // 与数据库状态再同步一次，避免本地状态和后端不一致
+      await loadSentenceChunkQuizStatus();
+    } catch (err) {
+      alert('生成句子题失败：' + (err as Error).message);
+    } finally {
+      setChunkQuizLoadingRowKey(null);
+    }
+  };
+
+  const handleCheckChunkQuizStatusForRow = async (
+    pair: { zh: string; en: string; sentenceId: string | null },
+    idx?: number,
+  ) => {
+    if (!id || chunkQuizCheckingRowKey) return;
+    const rowKey = getChunkQuizRowKey(pair, idx);
+    try {
+      setChunkQuizCheckingRowKey(rowKey);
+
+      if (pair.sentenceId) {
+        const existing = await fetchSentenceChunkQuizBySentenceId(id as string, pair.sentenceId);
+        if (existing?.item) {
+          setChunkQuizGeneratedSentenceIds((prev) => new Set([...prev, pair.sentenceId as string]));
+          setChunkQuizGeneratedRowKeys((prev) => new Set([...prev, rowKey]));
+        } else {
+          setChunkQuizGeneratedSentenceIds((prev) => {
+            const next = new Set(prev);
+            next.delete(pair.sentenceId as string);
+            return next;
+          });
+          setChunkQuizGeneratedRowKeys((prev) => {
+            const next = new Set(prev);
+            next.delete(rowKey);
+            return next;
+          });
+        }
+        setChunkQuizStatusLoadFailed(false);
+        return;
+      }
+
+      // sentenceId 不存在时，用状态接口按英文句子匹配检查
+      const status = await fetchSentenceChunkQuizStatus(id as string);
+      const normalizedList = (status.englishSentences || [])
+        .map((x) => normalizeForCompare(String(x || '')))
+        .filter(Boolean);
+      setChunkQuizGeneratedEnglishList(normalizedList);
+
+      const normalizedEn = normalizeForCompare(pair.en || '');
+      const matched = normalizedList.some((savedEn) =>
+        savedEn === normalizedEn || savedEn.includes(normalizedEn) || normalizedEn.includes(savedEn),
+      );
+      setChunkQuizGeneratedRowKeys((prev) => {
+        const next = new Set(prev);
+        if (matched) next.add(rowKey);
+        else next.delete(rowKey);
+        return next;
+      });
+      setChunkQuizStatusLoadFailed(false);
+    } catch (err) {
+      console.warn('Failed to check sentence chunk quiz status for row', err);
+      setChunkQuizStatusLoadFailed(true);
+    } finally {
+      setChunkQuizCheckingRowKey(null);
+    }
+  };
+
+  const checkChunkQuizAnswer = () => {
+    const current = chunkQuizItem;
+    if (!current) return;
+    const allCorrect = current.chunks.every((chunk, idx) => {
+      const userAnswer = chunkQuizAnswers[idx];
+      return userAnswer && userAnswer.trim().toLowerCase() === chunk.answerEnChunk.trim().toLowerCase();
+    });
+
+    setChunkQuizResult({
+      isCorrect: allCorrect,
+      message: allCorrect
+        ? '回答正确，词组组合完整。'
+        : `参考答案：${current.chunks.map((chunk) => chunk.answerEnChunk).join(' ')}`,
+    });
+  };
+
   const startTest = async () => {
     if (!id) return;
     try {
@@ -366,6 +524,7 @@ export default function DocumentDetailPage() {
       loadTranslation();
       loadExtractedWords();
       loadReviewSummary();
+      loadSentenceChunkQuizStatus();
     }
   }, [viewTab, id]);
 
@@ -395,6 +554,28 @@ export default function DocumentDetailPage() {
       setReviewLoading(false);
     }
   };
+
+  const loadSentenceChunkQuizStatus = async () => {
+    if (!id) return;
+    try {
+      const res = await fetchSentenceChunkQuizStatus(id as string);
+      setChunkQuizGeneratedSentenceIds(new Set((res.sentenceIds || []).filter(Boolean)));
+      setChunkQuizGeneratedEnglishList(
+        (res.englishSentences || []).map((x) => normalizeForCompare(String(x || ''))).filter(Boolean),
+      );
+      setChunkQuizStatusLoadFailed(false);
+    } catch (err) {
+      console.warn('Failed to load sentence chunk quiz status', err);
+      // 网络/数据库异常时不清空已有状态，避免误显示为“未生成”
+      setChunkQuizStatusLoadFailed(true);
+    }
+  };
+
+  useEffect(() => {
+    setChunkQuizGeneratedRowKeys(new Set());
+    setChunkQuizGeneratedEnglishList([]);
+    setChunkQuizStatusLoadFailed(false);
+  }, [id]);
 
   const handleImportReviewCards = async () => {
     if (!id || importingReview) return;
@@ -512,6 +693,32 @@ export default function DocumentDetailPage() {
       };
     });
   }, [doc?.originalText]);
+
+  const coreSentencePairs = useMemo(() => {
+    const zhLines = (doc?.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    const enLines = (doc?.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    const sentencePool = (doc?.paragraphs || []).flatMap((p) => p.sentences || []);
+    const usedSentenceIds = new Set<string>();
+    return zhLines
+      .map((zh, i) => {
+        const en = enLines[i];
+        const normalizedEn = normalizeForCompare(en || '');
+        const matched = sentencePool.find((s) => {
+          if (usedSentenceIds.has(s.id)) return false;
+          const normalizedSentence = normalizeForCompare(s.content);
+          return (
+            normalizedSentence === normalizedEn ||
+            normalizedSentence.includes(normalizedEn) ||
+            normalizedEn.includes(normalizedSentence)
+          );
+        });
+        if (matched?.id) {
+          usedSentenceIds.add(matched.id);
+        }
+        return { zh, en, sentenceId: matched?.id || null };
+      })
+      .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15));
+  }, [doc?.chineseText, doc?.englishText, doc?.paragraphs]);
 
   // 新增：处理鼠标选词组逻辑
   const handleTextSelection = () => {
@@ -874,7 +1081,7 @@ export default function DocumentDetailPage() {
           </div>
           ) : (
             <div className="space-y-8">
-              {(!showTest && !showWordQuiz) ? (
+              {(!showTest && !showWordQuiz && !showChunkQuiz) ? (
                 <>
                   <div className="flex flex-col gap-4 bg-blue-50 p-4 md:p-6 rounded-2xl md:rounded-3xl border border-blue-100">
                     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -1014,26 +1221,58 @@ export default function DocumentDetailPage() {
                           </div>
                           <div className="divide-y divide-gray-100">
                             {(() => {
-                              const zhLines = (doc.chineseText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-                              const enLines = (doc.englishText || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-                              
-                              // 启发式区分句子和单词：包含空格且长度大于 15 的通常是句子
-                              const sentences = zhLines.map((zh, i) => ({ zh, en: enLines[i] }))
-                                .filter(item => item.en && (item.en.includes(' ') && item.en.length > 15));
+                              if (coreSentencePairs.length === 0) return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到完整句子对照</div>;
 
-                              if (sentences.length === 0) return <div className="p-8 text-center text-gray-400 text-sm italic">未检测到完整句子对照</div>;
-
-                              return sentences.map((item, idx) => (
+                              return coreSentencePairs.map((item, idx) => (
                                 <div key={idx} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-0 hover:bg-gray-50 transition-colors">
                                   <div className="p-4 text-sm text-gray-800 leading-relaxed border-r border-gray-100 whitespace-pre-wrap">{item.zh}</div>
                                   <div className="p-4 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-medium border-r border-gray-100">{item.en}</div>
                                   <div className="p-3 flex items-center justify-center">
-                                    <button
-                                      onClick={() => openSentenceTraining(item.en)}
-                                      className="px-3 py-2 text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-xl hover:bg-indigo-100 transition-colors"
-                                    >
-                                      句子训练
-                                    </button>
+                                    <div className="flex flex-col gap-2">
+                                      {(() => {
+                                        const isGenerated = isChunkQuizGenerated(item, idx);
+                                        const isUnknown = !isGenerated && chunkQuizStatusLoadFailed;
+                                        return (
+                                      <span className={`px-2 py-1 text-[10px] font-bold rounded-lg text-center ${
+                                            isGenerated
+                                          ? 'bg-emerald-100 text-emerald-700'
+                                          : isUnknown
+                                            ? 'bg-amber-100 text-amber-700'
+                                            : 'bg-gray-100 text-gray-500'
+                                      }`}>
+                                            {isGenerated ? '已生成句子题' : (isUnknown ? '状态未知' : '未生成句子题')}
+                                      </span>
+                                        );
+                                      })()}
+                                      <button
+                                        onClick={() => openSentenceTraining(item.en)}
+                                        className="px-3 py-2 text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-xl hover:bg-indigo-100 transition-colors"
+                                      >
+                                        句子训练
+                                      </button>
+                                      <button
+                                        onClick={() => handleCheckChunkQuizStatusForRow(item, idx)}
+                                        disabled={!!chunkQuizCheckingRowKey || !!chunkQuizLoadingRowKey}
+                                        className="px-3 py-2 text-xs font-bold text-sky-700 bg-sky-50 border border-sky-100 rounded-xl hover:bg-sky-100 transition-colors disabled:opacity-50"
+                                      >
+                                        {chunkQuizCheckingRowKey === getChunkQuizRowKey(item, idx) ? '检查中...' : '检查状态'}
+                                      </button>
+                                      <button
+                                        onClick={() => handleGenerateChunkQuiz(item, idx)}
+                                        disabled={!!chunkQuizLoadingRowKey || !!chunkQuizCheckingRowKey}
+                                        className="px-3 py-2 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                                      >
+                                        {(() => {
+                                          const rowKey = getChunkQuizRowKey(item, idx);
+                                          const isGenerated = isChunkQuizGenerated(item, idx);
+                                          const isUnknown = !isGenerated && chunkQuizStatusLoadFailed;
+                                          if (chunkQuizLoadingRowKey === rowKey) {
+                                            return isGenerated ? '加载中...' : '处理中...';
+                                          }
+                                          return isGenerated ? '查看句子题' : (isUnknown ? '查看/生成句子题' : '生成句子题');
+                                        })()}
+                                      </button>
+                                    </div>
                                   </div>
                                 </div>
                               ));
@@ -1321,6 +1560,96 @@ export default function DocumentDetailPage() {
                       </button>
                     </div>
                   </div>
+                </div>
+              ) : showChunkQuiz ? (
+                <div className="bg-white p-10 rounded-3xl border border-gray-100 shadow-xl">
+                  <header className="flex justify-between items-center mb-10">
+                    <button
+                      onClick={() => setShowChunkQuiz(false)}
+                      className="text-gray-400 hover:text-gray-600 font-bold text-sm uppercase tracking-widest"
+                    >
+                      退出句子题
+                    </button>
+                    <span className="text-emerald-600 font-bold">
+                      当前句子题
+                    </span>
+                  </header>
+
+                  {(() => {
+                    const currentChunkQuiz = chunkQuizItem;
+                    if (!currentChunkQuiz) return null;
+
+                    return (
+                      <div className="space-y-8">
+                        <div>
+                          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">中文句子</h3>
+                          <p className="text-2xl font-medium text-gray-900 leading-relaxed">{chunkQuizSentenceLabel || currentChunkQuiz.promptZh}</p>
+                        </div>
+
+                        <div className="space-y-4">
+                          {currentChunkQuiz.chunks.map((chunk, idx) => (
+                            <div key={`${chunk.zhHint}-${idx}`} className="rounded-2xl border border-gray-100 p-5">
+                              <p className="text-sm font-bold text-gray-700 mb-3">{idx + 1}. {chunk.zhHint}</p>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                {chunk.optionsEn.map((opt) => (
+                                  <button
+                                    key={opt}
+                                    disabled={!!chunkQuizResult}
+                                    onClick={() => setChunkQuizAnswers((prev) => ({ ...prev, [idx]: opt }))}
+                                    className={`px-4 py-3 rounded-xl text-left border transition-all ${
+                                      chunkQuizAnswers[idx] === opt
+                                        ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                                        : 'border-gray-200 hover:border-emerald-300'
+                                    }`}
+                                  >
+                                    {opt}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {chunkQuizResult && (
+                          <div className={`p-6 rounded-2xl ${chunkQuizResult.isCorrect ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
+                            <p className="font-bold mb-1">{chunkQuizResult.isCorrect ? '回答正确！' : '回答错误'}</p>
+                            <p className="text-sm opacity-80">{chunkQuizResult.message}</p>
+                          </div>
+                        )}
+
+                        <div className="pt-6 border-t border-gray-100 flex gap-4">
+                          {!chunkQuizResult ? (
+                            <button
+                              onClick={checkChunkQuizAnswer}
+                              disabled={Object.keys(chunkQuizAnswers).length < currentChunkQuiz.chunks.length}
+                              className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg hover:bg-emerald-700 disabled:opacity-50 transition-all"
+                            >
+                              提交判定
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                alert('当前句子题完成！');
+                                setShowChunkQuiz(false);
+                              }}
+                              className="flex-1 py-4 bg-black text-white rounded-2xl font-bold shadow-lg hover:bg-gray-800 transition-all"
+                            >
+                              完成测试
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              setChunkQuizAnswers({});
+                              setChunkQuizResult(null);
+                            }}
+                            className="px-8 py-4 border border-gray-200 rounded-2xl font-bold text-gray-500 hover:bg-gray-50"
+                          >
+                            重置
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="bg-white p-10 rounded-3xl border border-gray-100 shadow-xl">

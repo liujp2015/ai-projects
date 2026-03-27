@@ -37,6 +37,30 @@ async function apiFetch(url: string, options: RequestInit = {}): Promise<Respons
   return fetch(url, mergedOptions);
 }
 
+async function parseJsonSafe<T>(res: Response, fallbackErrorMessage: string): Promise<T> {
+  const text = await res.text();
+  if (!text || !text.trim()) {
+    throw new Error(`${fallbackErrorMessage}（响应为空）`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`${fallbackErrorMessage}（响应不是有效 JSON）`);
+  }
+}
+
+async function parseJsonNullable<T>(res: Response): Promise<T | null> {
+  const text = await res.text();
+  if (!text || !text.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
 export type DocumentItem = {
   id: string;
   title: string;
@@ -244,6 +268,23 @@ export type SentencePatternTrainingHistoryItem = {
   updatedAt: string;
 };
 
+export type SentenceChunkQuizItem = {
+  promptZh: string;
+  englishSentence: string;
+  chunks: Array<{
+    zhHint: string;
+    answerEnChunk: string;
+    optionsEn: string[];
+  }>;
+};
+
+export type SentenceChunkQuizSaved = {
+  questionId: string;
+  sentenceId: string;
+  fromCache?: boolean;
+  item: SentenceChunkQuizItem;
+};
+
 export async function validateSentence(word: string, scenario: string, sentence: string): Promise<AIValidationResult> {
   const res = await apiFetch('/api/ai/validate-sentence', {
     method: 'POST',
@@ -278,6 +319,56 @@ export async function fetchSentencePatternTrainingHistory(
   const res = await apiFetch(`/api/ai/sentence-pattern-training-history${suffix}`);
   if (!res.ok) throw new Error(`Fetch training history failed: ${res.status}`);
   return res.json();
+}
+
+export async function generateSentenceChunkQuiz(
+  pairs: Array<{ zh: string; en: string }>,
+): Promise<{ items: SentenceChunkQuizItem[]; count: number }> {
+  const res = await apiFetch('/api/ai/sentence-chunk-quiz', {
+    method: 'POST',
+    body: JSON.stringify({ pairs }),
+  });
+  if (!res.ok) throw new Error(`Generate sentence chunk quiz failed: ${res.status}`);
+  return res.json();
+}
+
+export async function generateSentenceChunkQuizForPair(
+  documentId: string,
+  payload: { zh: string; en: string; sentenceId?: string; force?: boolean },
+): Promise<SentenceChunkQuizSaved> {
+  const res = await apiFetch(`/api/documents/${documentId}/sentence-chunk-quiz/generate`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Generate sentence chunk quiz for pair failed: ${res.status}${text ? ` - ${text}` : ''}`);
+  }
+  return parseJsonSafe<SentenceChunkQuizSaved>(res, '生成句子题失败');
+}
+
+export async function fetchSentenceChunkQuizBySentenceId(
+  documentId: string,
+  sentenceId: string,
+): Promise<SentenceChunkQuizSaved | null> {
+  const res = await apiFetch(`/api/documents/${documentId}/sentence-chunk-quiz?sentenceId=${encodeURIComponent(sentenceId)}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Fetch sentence chunk quiz failed: ${res.status}${text ? ` - ${text}` : ''}`);
+  }
+  return parseJsonNullable<SentenceChunkQuizSaved>(res);
+}
+
+export async function fetchSentenceChunkQuizStatus(
+  documentId: string,
+): Promise<{ count: number; sentenceIds: string[]; englishSentences: string[] }> {
+  const res = await apiFetch(`/api/documents/${documentId}/sentence-chunk-quiz/status`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Fetch sentence chunk quiz status failed: ${res.status}${text ? ` - ${text}` : ''}`);
+  }
+  const parsed = await parseJsonNullable<{ count: number; sentenceIds: string[]; englishSentences: string[] }>(res);
+  return parsed ?? { count: 0, sentenceIds: [], englishSentences: [] };
 }
 
 export type Exercise = {

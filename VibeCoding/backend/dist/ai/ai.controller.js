@@ -60,6 +60,16 @@ let AIController = class AIController {
             count: items.length,
         };
     }
+    async sentenceChunkQuiz(pairs) {
+        if (!Array.isArray(pairs) || pairs.length === 0) {
+            throw new common_1.BadRequestException('pairs 不能为空');
+        }
+        const items = await this.aiService.generateSentenceChunkQuiz(pairs);
+        return {
+            items,
+            count: items.length,
+        };
+    }
 };
 exports.AIController = AIController;
 __decorate([
@@ -97,6 +107,13 @@ __decorate([
     __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", Promise)
 ], AIController.prototype, "sentencePatternTrainingHistory", null);
+__decorate([
+    (0, common_1.Post)('sentence-chunk-quiz'),
+    __param(0, (0, common_1.Body)('pairs')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Array]),
+    __metadata("design:returntype", Promise)
+], AIController.prototype, "sentenceChunkQuiz", null);
 exports.AIController = AIController = __decorate([
     (0, common_1.Controller)('ai'),
     __metadata("design:paramtypes", [ai_service_1.AIService])

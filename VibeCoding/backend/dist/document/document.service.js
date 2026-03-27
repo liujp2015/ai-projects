@@ -699,6 +699,140 @@ let DocumentService = DocumentService_1 = class DocumentService {
         });
         return this.shuffleArray(questions).slice(0, limit);
     }
+    isSentenceChunkQuizQuestion(q) {
+        return q?.type === 'CHOICE' && q?.structuredData?.mode === 'SENTENCE_CHUNK_QUIZ';
+    }
+    toSentenceChunkQuizItem(question) {
+        const chunksRaw = Array.isArray(question?.structuredData?.chunks)
+            ? question.structuredData.chunks
+            : [];
+        return {
+            promptZh: String(question?.promptZh ?? '').trim(),
+            englishSentence: String(question?.answerEn ?? '').trim(),
+            chunks: chunksRaw
+                .map((chunk) => ({
+                zhHint: String(chunk?.zhHint ?? '').trim(),
+                answerEnChunk: String(chunk?.answerEnChunk ?? '').trim(),
+                optionsEn: Array.isArray(chunk?.optionsEn)
+                    ? chunk.optionsEn.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 4)
+                    : [],
+            }))
+                .filter((chunk) => chunk.zhHint && chunk.answerEnChunk && chunk.optionsEn.length === 4),
+        };
+    }
+    async getSentenceChunkQuiz(documentId, sentenceId) {
+        const question = await this.prisma.exerciseQuestion.findFirst({
+            where: {
+                documentId,
+                sentenceId,
+                type: 'CHOICE',
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+        if (!question || !this.isSentenceChunkQuizQuestion(question)) {
+            return null;
+        }
+        return {
+            questionId: question.id,
+            sentenceId,
+            item: this.toSentenceChunkQuizItem(question),
+        };
+    }
+    async getSentenceChunkQuizStatus(documentId) {
+        const questions = await this.prisma.exerciseQuestion.findMany({
+            where: {
+                documentId,
+                type: 'CHOICE',
+            },
+            select: {
+                id: true,
+                sentenceId: true,
+                answerEn: true,
+                structuredData: true,
+            },
+        });
+        const chunkQuestions = questions.filter((q) => this.isSentenceChunkQuizQuestion(q));
+        const generatedSentenceIds = Array.from(new Set(chunkQuestions.map((q) => q.sentenceId)));
+        const generatedEnglishSentences = Array.from(new Set(chunkQuestions
+            .map((q) => String(q.answerEn ?? '').trim())
+            .filter(Boolean)));
+        return {
+            count: generatedSentenceIds.length,
+            sentenceIds: generatedSentenceIds,
+            englishSentences: generatedEnglishSentences,
+        };
+    }
+    async generateSentenceChunkQuizForPair(documentId, payload) {
+        const zh = String(payload?.zh ?? '').trim();
+        const en = String(payload?.en ?? '').trim();
+        const force = !!payload?.force;
+        let sentenceId = String(payload?.sentenceId ?? '').trim();
+        if (!zh || !en) {
+            throw new Error('zh and en are required');
+        }
+        if (!sentenceId) {
+            const doc = await this.prisma.document.findUnique({
+                where: { id: documentId },
+                include: {
+                    paragraphs: {
+                        include: { sentences: true },
+                    },
+                },
+            });
+            if (!doc)
+                throw new Error('Document not found');
+            const sentences = doc.paragraphs.flatMap((p) => p.sentences);
+            const matchedSent = sentences.find((s) => this.normalizeForCompare(s.content).includes(this.normalizeForCompare(en)) ||
+                this.normalizeForCompare(en).includes(this.normalizeForCompare(s.content)));
+            if (!matchedSent) {
+                throw new Error('No matched sentence found for this pair');
+            }
+            sentenceId = matchedSent.id;
+        }
+        if (!force) {
+            const existing = await this.prisma.exerciseQuestion.findFirst({
+                where: { documentId, sentenceId, type: 'CHOICE' },
+                orderBy: { createdAt: 'desc' },
+            });
+            if (existing && this.isSentenceChunkQuizQuestion(existing)) {
+                return {
+                    questionId: existing.id,
+                    sentenceId,
+                    fromCache: true,
+                    item: this.toSentenceChunkQuizItem(existing),
+                };
+            }
+        }
+        await this.prisma.exerciseQuestion.deleteMany({
+            where: { documentId, sentenceId, type: 'CHOICE' },
+        });
+        const items = await this.aiService.generateSentenceChunkQuiz([{ zh, en }]);
+        const item = items[0];
+        if (!item)
+            throw new Error('AI did not return a valid sentence chunk quiz');
+        const created = await this.prisma.exerciseQuestion.create({
+            data: {
+                type: 'CHOICE',
+                promptZh: item.promptZh,
+                answerEn: item.englishSentence,
+                scrambledTokens: [],
+                options: [],
+                blankedEn: null,
+                structuredData: {
+                    mode: 'SENTENCE_CHUNK_QUIZ',
+                    chunks: item.chunks,
+                },
+                documentId,
+                sentenceId,
+            },
+        });
+        return {
+            questionId: created.id,
+            sentenceId,
+            fromCache: false,
+            item,
+        };
+    }
     async generateWordQuiz(documentId, force = false) {
         const doc = await this.prisma.document.findUnique({
             where: { id: documentId },

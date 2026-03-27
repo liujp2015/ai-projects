@@ -82,4 +82,20 @@ export class AIController {
       count: items.length,
     };
   }
+
+  @Post('sentence-chunk-quiz')
+  async sentenceChunkQuiz(
+    @Body('pairs')
+    pairs: Array<{ zh: string; en: string }>,
+  ) {
+    if (!Array.isArray(pairs) || pairs.length === 0) {
+      throw new BadRequestException('pairs 不能为空');
+    }
+
+    const items = await this.aiService.generateSentenceChunkQuiz(pairs);
+    return {
+      items,
+      count: items.length,
+    };
+  }
 }

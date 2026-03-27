@@ -179,6 +179,110 @@ ${scenario}
             .filter((item) => item.en && item.zh)
             .slice(0, 3);
     }
+    async generateSentenceChunkQuiz(pairs) {
+        const config = (0, qwen_config_1.getQwenConfig)();
+        if (!config.apiKey) {
+            throw new Error('Qwen API Key (DASHSCOPE_API_KEY) not configured');
+        }
+        const cleanPairs = (pairs || [])
+            .map((p) => ({
+            zh: String(p?.zh ?? '').trim(),
+            en: String(p?.en ?? '').trim(),
+        }))
+            .filter((p) => p.zh && p.en)
+            .slice(0, 20);
+        if (cleanPairs.length === 0) {
+            return [];
+        }
+        const client = new openai_1.default({
+            apiKey: config.apiKey,
+            baseURL: config.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        });
+        const prompt = `
+你是一个英语出题助手。请基于给定的中英句子对，生成“中文选英文词组”的句子题。
+
+输入（按顺序）：
+${JSON.stringify(cleanPairs, null, 2)}
+
+任务要求：
+1) 每个句子生成 1 道题，输出字段 promptZh 与 englishSentence。
+2) 把 englishSentence 切成 3~6 个“自然词组 chunks”（不是逐词切分）。
+3) 对每个 chunk，生成一个对应中文提示 zhHint（简短中文，能提示该词组含义）。
+4) 对每个 chunk 生成 4 个英文选项 optionsEn，其中：
+   - 1 个必须是正确答案 answerEnChunk
+   - 3 个是同场景、易混淆但错误的干扰项
+5) optionsEn 顺序打乱，不要总把正确项放第一个。
+6) 仅输出合法 JSON，不要 Markdown，不要解释文字。
+
+输出格式：
+{
+  "items": [
+    {
+      "promptZh": "完整中文句子",
+      "englishSentence": "完整英文句子",
+      "chunks": [
+        {
+          "zhHint": "中文提示",
+          "answerEnChunk": "英文词组",
+          "optionsEn": ["A", "B", "C", "D"]
+        }
+      ]
+    }
+  ]
+}
+`;
+        const completion = await client.chat.completions.create({
+            model: config.textModel || 'qwen-turbo',
+            messages: [
+                {
+                    role: 'system',
+                    content: '你是英语教学出题专家。严格输出 JSON，不要输出任何额外文本。',
+                },
+                { role: 'user', content: prompt },
+            ],
+            temperature: 0.5,
+            response_format: { type: 'json_object' },
+        });
+        const raw = String(completion.choices[0]?.message?.content ?? '').trim();
+        const jsonText = this.extractJsonText(raw);
+        const parsed = JSON.parse(jsonText);
+        const items = Array.isArray(parsed?.items) ? parsed.items : [];
+        return items
+            .map((item) => ({
+            promptZh: String(item?.promptZh ?? '').trim(),
+            englishSentence: String(item?.englishSentence ?? '').trim(),
+            chunks: Array.isArray(item?.chunks)
+                ? item.chunks
+                    .map((chunk) => {
+                    const answerEnChunk = String(chunk?.answerEnChunk ?? '').trim();
+                    const optionsRaw = Array.isArray(chunk?.optionsEn)
+                        ? chunk?.optionsEn
+                        : [];
+                    const optionsEn = optionsRaw
+                        .map((x) => String(x ?? '').trim())
+                        .filter(Boolean)
+                        .slice(0, 4);
+                    if (answerEnChunk &&
+                        !optionsEn.some((opt) => opt === answerEnChunk)) {
+                        optionsEn[0] = answerEnChunk;
+                    }
+                    const dedupOptions = Array.from(new Set(optionsEn)).slice(0, 4);
+                    while (dedupOptions.length < 4 && answerEnChunk) {
+                        dedupOptions.push(answerEnChunk);
+                    }
+                    return {
+                        zhHint: String(chunk?.zhHint ?? '').trim(),
+                        answerEnChunk,
+                        optionsEn: dedupOptions,
+                    };
+                })
+                    .filter((chunk) => chunk.zhHint &&
+                    chunk.answerEnChunk &&
+                    chunk.optionsEn.length === 4)
+                : [],
+        }))
+            .filter((item) => item.promptZh && item.englishSentence && item.chunks.length > 0);
+    }
     async saveSentencePatternTrainingHistory(params) {
         const { documentId, sourceSentence, scenario, items } = params;
         const normalizedDocumentId = documentId?.trim() || null;

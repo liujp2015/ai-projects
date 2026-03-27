@@ -129,6 +129,28 @@ export class DocumentController {
     return this.documentService.getQuestions(id, limit ? parseInt(limit) : 20);
   }
 
+  @Post(':id/sentence-chunk-quiz/generate')
+  async generateSentenceChunkQuiz(
+    @Param('id') id: string,
+    @Body()
+    body: { zh: string; en: string; sentenceId?: string; force?: boolean },
+  ) {
+    return this.documentService.generateSentenceChunkQuizForPair(id, body);
+  }
+
+  @Get(':id/sentence-chunk-quiz')
+  async getSentenceChunkQuiz(
+    @Param('id') id: string,
+    @Query('sentenceId') sentenceId: string,
+  ) {
+    return this.documentService.getSentenceChunkQuiz(id, sentenceId);
+  }
+
+  @Get(':id/sentence-chunk-quiz/status')
+  async getSentenceChunkQuizStatus(@Param('id') id: string) {
+    return this.documentService.getSentenceChunkQuizStatus(id);
+  }
+
   @Post(':id/extract-words')
   async extractWords(@Param('id') id: string) {
     try {

@@ -74,6 +74,15 @@ let DocumentController = DocumentController_1 = class DocumentController {
     async getQuestions(id, limit) {
         return this.documentService.getQuestions(id, limit ? parseInt(limit) : 20);
     }
+    async generateSentenceChunkQuiz(id, body) {
+        return this.documentService.generateSentenceChunkQuizForPair(id, body);
+    }
+    async getSentenceChunkQuiz(id, sentenceId) {
+        return this.documentService.getSentenceChunkQuiz(id, sentenceId);
+    }
+    async getSentenceChunkQuizStatus(id) {
+        return this.documentService.getSentenceChunkQuizStatus(id);
+    }
     async extractWords(id) {
         try {
             return await this.documentService.extractWordsFromDocument(id);
@@ -213,6 +222,29 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], DocumentController.prototype, "getQuestions", null);
+__decorate([
+    (0, common_1.Post)(':id/sentence-chunk-quiz/generate'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "generateSentenceChunkQuiz", null);
+__decorate([
+    (0, common_1.Get)(':id/sentence-chunk-quiz'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Query)('sentenceId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "getSentenceChunkQuiz", null);
+__decorate([
+    (0, common_1.Get)(':id/sentence-chunk-quiz/status'),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "getSentenceChunkQuizStatus", null);
 __decorate([
     (0, common_1.Post)(':id/extract-words'),
     __param(0, (0, common_1.Param)('id')),
